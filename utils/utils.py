@@ -505,6 +505,24 @@ def isStateValid(spaceInformation, state, system=None, config=None, obstacle_con
     return True
 
 
+from __future__ import annotations
+
+
+def normalize_obstacle_config(obstacle_config):
+    """
+    Normalize obstacle config by auto-enabling obstacle checks when
+    obstacle geometry entries are present.
+    """
+    if isinstance(obstacle_config, dict):
+        if (
+            obstacle_config.get("circles")
+            or obstacle_config.get("aabbs")
+            or obstacle_config.get("boxes")
+        ):
+            obstacle_config["enabled"] = obstacle_config.get("enabled", True)
+    return obstacle_config
+
+
 def state2list(state, state_type: str) -> list:
     # If state is already a list, tuple, or numpy array, return it as a list
     if isinstance(state, (list, tuple, np.ndarray)):
