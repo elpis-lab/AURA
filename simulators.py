@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import argparse
 from abc import ABC, abstractmethod
 from typing import Optional
 
 import numpy as np
 
-from systems import kinamticCar, doubleIntegrator, pushingObject
+from mujoco_car import Sim as MujocoCarSimulator
+from mujoco_pushing import Sim as MujocoPushingSimulator
+from systems import kinematicCar, doubleIntegrator, pushingObject
 from utils.utils import addNoise
-from sim_network import SimClient
 
 
 class Simulator(ABC):
@@ -75,7 +77,7 @@ class Simulator(ABC):
 class KinematicCarGaussianNoise(Simulator):
     def __init__(self, config: Optional[dict] = None):
         super().__init__("simple_car", config=config)
-        self.system = kinamticCar()
+        self.system = kinematicCar()
 
     def execute_segment(self, control, duration):
         control_np = np.array(control, dtype=float).reshape(-1)
@@ -122,8 +124,7 @@ class DoubleIntegratorGaussianNoise(Simulator):
 class PushingObjectGaussianNoise(Simulator):
     def __init__(self, config: Optional[dict] = None):
         super().__init__("pushing", config=config)
-        object_name = self.config.get("objectName", "crackerBox")
-        self.system = pushingObject(object_name=object_name)
+        self.system = pushingObject()
 
     def execute_segment(self, control, duration):
         control_np = np.array(control, dtype=float).reshape(-1)
@@ -145,52 +146,52 @@ class PushingObjectGaussianNoise(Simulator):
 
 
 class KinematicCarMujoco(Simulator):
-    def __init__(self, config: Optional[dict] = None, client: Optional[SimClient] = None):
+    """Local in-process simulator implementation for Mujoco mode."""
+
+    def __init__(self, config: Optional[dict] = None):
         super().__init__("simple_car", config=config)
-        self.client = client if client is not None else SimClient()
-
-    def reset(self):
-        return self.client.execute("reset")
-
-    def stop(self):
-        return self.client.execute("stop")
-
-    def get_state(self):
-        return self.client.execute("get_state")
+        self.simulator = MujocoCarSimulator()
 
     def execute_segment(self, control, duration):
-        return self.client.execute("execute_segment", [control, duration])
+        control_np = np.array(control, dtype=float).reshape(-1)
+        duration = float(duration)
+        if duration <= 0.0:
+            return self.get_state()
+
+        n_steps = max(1, int(np.ceil(duration / self.dt)))
+        dt_step = duration / n_steps
+        for _ in range(n_steps):
+            self.current_state = self.simulator.step(control_np, dt_step)
+        self.running = True
+        return self.get_state()
 
 
 class PushingObjectMujoco(Simulator):
-    def __init__(self, config: Optional[dict] = None, client: Optional[SimClient] = None):
+    """Local in-process simulator implementation for Mujoco mode."""
+
+    def __init__(self, config: Optional[dict] = None):
         super().__init__("pushing", config=config)
-        self.client = client if client is not None else SimClient()
-
-    def reset(self):
-        return self.client.execute("reset")
-
-    def stop(self):
-        return self.client.execute("stop")
-
-    def get_state(self):
-        return self.client.execute("get_state")
-
-    def set_obj_init_pose(self, pose):
-        return self.client.execute("set_obj_init_pose", [pose])
-
-    def set_obj_init_poses(self, env_id, poses):
-        return self.client.execute("set_obj_init_poses", [env_id, poses])
+        self.simulator = MujocoPushingSimulator()
 
     def execute_segment(self, control, duration):
-        return self.client.execute("execute_segment", [control, duration])
+        control_np = np.array(control, dtype=float).reshape(-1)
+        duration = float(duration)
+        if duration <= 0.0:
+            return self.get_state()
+
+        n_steps = max(1, int(np.ceil(duration / self.dt)))
+        dt_step = duration / n_steps
+        for _ in range(n_steps):
+            self.current_state = self.simulator.step(self.current_state, control_np, dt_step)
+        self.running = True
+        return self.get_state()
 
 
 def create_simulator(
     system_name: str,
     mode: str,
     config: Optional[dict] = None,
-    client: Optional[SimClient] = None,
+    client: Optional[object] = None,
 ) -> Simulator:
     """
     Factory selector by system name + backend mode.
@@ -208,8 +209,34 @@ def create_simulator(
             return PushingObjectGaussianNoise(config=config)
     elif mode == "mujoco":
         if system_name == "simple_car":
-            return KinematicCarMujoco(config=config, client=client)
+            return KinematicCarMujoco(config=config)
         if system_name == "pushing":
-            return PushingObjectMujoco(config=config, client=client)
+            return PushingObjectMujoco(config=config)
 
     raise ValueError(f"Unsupported simulator combination: system={system_name}, mode={mode}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Open a simulator.")
+    parser.add_argument(
+        "system_name",
+        choices=["kinematic_car", "double_integrator", "pushing_object"],
+        help="System name.",
+    )
+    parser.add_argument("mode", choices=["gaussian", "mujoco"], help="Simulator mode.")
+
+    args = parser.parse_args()
+    system_alias = {
+        "kinematic_car": "simple_car",
+        "double_integrator": "double_integrator",
+        "pushing_object": "pushing",
+    }
+    simulator = create_simulator(system_alias[args.system_name], args.mode, config={})
+
+    simulator.reset()
+    print(f"[INFO] Opened simulator: system={args.system_name}, mode={args.mode}")
+    print(f"[INFO] Current state: {simulator.get_state()}")
+
+
+if __name__ == "__main__":
+    main()
