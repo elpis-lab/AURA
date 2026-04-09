@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import threading
+import time
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -21,6 +23,7 @@ class Simulator(ABC):
         self.dt = float(self.config.get("propagation_step_size", 0.1))
         self.pos_std = float(self.config.get("sampling_position_std", 0.0))
         self.rot_std = float(self.config.get("sampling_rotation_std", 0.0))
+        self.vel_std = float(self.config.get("sampling_velocity_std", self.pos_std))
         self.running = True
 
         default_state = [0.0, 0.0, 0.0]
@@ -44,11 +47,16 @@ class Simulator(ABC):
 
     def set_obj_init_pose(self, pose):
         pose_np = np.array(pose, dtype=float).reshape(-1)
-        if pose_np.shape[0] < 3:
-            raise ValueError(f"Expected pose with at least 3 values, got {pose}")
-        self.current_state = np.array([pose_np[0], pose_np[1], pose_np[2]], dtype=float)
+        expected_dim = int(self.start_state.shape[0])
+        if pose_np.shape[0] < expected_dim:
+            raise ValueError(f"Expected pose with at least {expected_dim} values, got {pose}")
+        self.current_state = np.array(pose_np[:expected_dim], dtype=float)
         self.start_state = self.current_state.copy()
         return self.get_state()
+
+    def set_object_init_pose(self, pose):
+        """Compatibility alias used by experiment scripts."""
+        return self.set_obj_init_pose(pose)
 
     def set_obj_init_poses(self, env_id, poses):
         if poses is None or len(poses) == 0:
@@ -76,7 +84,7 @@ class Simulator(ABC):
 
 class KinematicCarGaussianNoise(Simulator):
     def __init__(self, config: Optional[dict] = None):
-        super().__init__("simple_car", config=config)
+        super().__init__("kinematic_car", config=config)
         self.system = kinematicCar()
 
     def execute_segment(self, control, duration):
@@ -114,16 +122,16 @@ class DoubleIntegratorGaussianNoise(Simulator):
         for _ in range(n_steps):
             self.current_state = self.system.propagate(self.current_state, control_np, dt_step)
 
-        # For double integrator, treat all dimensions as positional noise scale for now.
-        noise = np.random.normal(0.0, self.pos_std, size=self.current_state.shape)
-        self.current_state = (self.current_state + noise).astype(float)
+        vel_noise = np.random.normal(0.0, self.vel_std, size=3)
+        self.current_state[3:6] = self.current_state[3:6] + vel_noise
+        self.current_state = self.current_state.astype(float)
         self.running = True
         return self.get_state()
 
 
 class PushingObjectGaussianNoise(Simulator):
     def __init__(self, config: Optional[dict] = None):
-        super().__init__("pushing", config=config)
+        super().__init__("pushing_object", config=config)
         self.system = pushingObject()
 
     def execute_segment(self, control, duration):
@@ -149,19 +157,37 @@ class KinematicCarMujoco(Simulator):
     """Local in-process simulator implementation for Mujoco mode."""
 
     def __init__(self, config: Optional[dict] = None):
-        super().__init__("simple_car", config=config)
+        super().__init__("kinematic_car", config=config)
         self.simulator = MujocoCarSimulator()
+        self._viewer_thread = None
+        self._start_viewer_thread()
+
+    def _start_viewer_thread(self):
+        if self._viewer_thread is not None and self._viewer_thread.is_alive():
+            return
+        self._viewer_thread = threading.Thread(
+            target=self.simulator.run_viewer,
+            daemon=True,
+        )
+        self._viewer_thread.start()
+        # Let passive viewer loop initialize before queueing controls.
+        time.sleep(0.5)
+
+    def reset(self):
+        self._start_viewer_thread()
+        self.simulator.reset()
+        self.current_state = np.asarray(self.simulator.get_state(), dtype=float)
+        self.running = True
+        return self.get_state()
 
     def execute_segment(self, control, duration):
         control_np = np.array(control, dtype=float).reshape(-1)
         duration = float(duration)
         if duration <= 0.0:
             return self.get_state()
-
-        n_steps = max(1, int(np.ceil(duration / self.dt)))
-        dt_step = duration / n_steps
-        for _ in range(n_steps):
-            self.current_state = self.simulator.step(control_np, dt_step)
+        self._start_viewer_thread()
+        self.simulator.execute_segment(control_np, duration)
+        self.current_state = np.asarray(self.simulator.get_state(), dtype=float)
         self.running = True
         return self.get_state()
 
@@ -170,19 +196,46 @@ class PushingObjectMujoco(Simulator):
     """Local in-process simulator implementation for Mujoco mode."""
 
     def __init__(self, config: Optional[dict] = None):
-        super().__init__("pushing", config=config)
+        super().__init__("pushing_object", config=config)
         self.simulator = MujocoPushingSimulator()
+        self._viewer_thread = None
+        self._start_viewer_thread()
+
+    def _start_viewer_thread(self):
+        if self._viewer_thread is not None and self._viewer_thread.is_alive():
+            return
+        self._viewer_thread = threading.Thread(
+            target=self.simulator.run_viewer,
+            daemon=True,
+        )
+        self._viewer_thread.start()
+        # Give the passive viewer loop a brief moment to initialize before queueing controls.
+        time.sleep(0.5)
+
+    def reset(self):
+        self._start_viewer_thread()
+        self.simulator.reset()
+        self.running = True
+        # Keep wrapper and underlying simulator state aligned after reset.
+        return self.set_obj_init_pose(self.start_state.tolist())
+
+    def set_obj_init_pose(self, pose):
+        state = super().set_obj_init_pose(pose)
+        self._start_viewer_thread()
+        self.simulator.set_obj_init_pose(np.asarray(state, dtype=float))
+        return self.get_state()
 
     def execute_segment(self, control, duration):
         control_np = np.array(control, dtype=float).reshape(-1)
         duration = float(duration)
         if duration <= 0.0:
             return self.get_state()
-
-        n_steps = max(1, int(np.ceil(duration / self.dt)))
-        dt_step = duration / n_steps
-        for _ in range(n_steps):
-            self.current_state = self.simulator.step(self.current_state, control_np, dt_step)
+        self._start_viewer_thread()
+        result = self.simulator.execute_segment(control_np, duration)
+        result_np = np.asarray(result, dtype=float)
+        if result_np.ndim > 1:
+            result_np = result_np[0]
+        self.current_state = result_np
         self.running = True
         return self.get_state()
 
@@ -201,16 +254,16 @@ def create_simulator(
     system_name = system_name.lower()
 
     if mode == "gaussian":
-        if system_name == "simple_car":
+        if system_name == "kinematic_car":
             return KinematicCarGaussianNoise(config=config)
         if system_name == "double_integrator":
             return DoubleIntegratorGaussianNoise(config=config)
-        if system_name == "pushing":
+        if system_name == "pushing_object":
             return PushingObjectGaussianNoise(config=config)
     elif mode == "mujoco":
-        if system_name == "simple_car":
+        if system_name == "kinematic_car":
             return KinematicCarMujoco(config=config)
-        if system_name == "pushing":
+        if system_name == "pushing_object":
             return PushingObjectMujoco(config=config)
 
     raise ValueError(f"Unsupported simulator combination: system={system_name}, mode={mode}")
@@ -226,16 +279,17 @@ def main():
     parser.add_argument("mode", choices=["gaussian", "mujoco"], help="Simulator mode.")
 
     args = parser.parse_args()
-    system_alias = {
-        "kinematic_car": "simple_car",
-        "double_integrator": "double_integrator",
-        "pushing_object": "pushing",
-    }
-    simulator = create_simulator(system_alias[args.system_name], args.mode, config={})
+    simulator = create_simulator(args.system_name, args.mode, config={})
 
     simulator.reset()
     print(f"[INFO] Opened simulator: system={args.system_name}, mode={args.mode}")
     print(f"[INFO] Current state: {simulator.get_state()}")
+    if args.mode == "mujoco":
+        print("[INFO] Launching MuJoCo viewer... Press Ctrl+C to exit.")
+        try:
+            simulator.simulator.run_viewer()
+        except KeyboardInterrupt:
+            print("[INFO] MuJoCo viewer stopped.")
 
 
 if __name__ == "__main__":

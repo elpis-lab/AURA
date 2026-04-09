@@ -429,7 +429,7 @@ def isStateValid(spaceInformation, state, system=None, config=None, obstacle_con
         return True
 
     # Extract state position based on system type
-    if system in ["simple_car", "pushing"]:
+    if system in ["simple_car", "kinematic_car", "pushing", "pushing_object"]:
         # SE2 state: x, y, theta
         try:
             x = state.getX()
@@ -505,9 +505,6 @@ def isStateValid(spaceInformation, state, system=None, config=None, obstacle_con
     return True
 
 
-from __future__ import annotations
-
-
 def normalize_obstacle_config(obstacle_config):
     """
     Normalize obstacle config by auto-enabling obstacle checks when
@@ -528,7 +525,7 @@ def state2list(state, state_type: str) -> list:
     if isinstance(state, (list, tuple, np.ndarray)):
         return list(state) if not isinstance(state, np.ndarray) else state.tolist()
 
-    if state_type == "simple_car" or state_type == "pushing":
+    if state_type in ("simple_car", "kinematic_car", "pushing", "pushing_object"):
         # SE2 state: x, y, theta
         return [state.getX(), state.getY(), state.getYaw()]
 
@@ -671,7 +668,7 @@ def isSE3Equal(state1, state2, tolerance=1e-6):
 
 def isStateEqual(state1, state2, system, tolerance=1e-6):
     """Generic state comparison function that handles different systems."""
-    if system == "simple_car":
+    if system in ("simple_car", "kinematic_car"):
         return isSE2Equal(state1, state2, tolerance)
     elif system == "dublin_airplane":
         return isSE3Equal(state1, state2, tolerance)
@@ -701,59 +698,21 @@ def normalize_quaternion(quat):
 def arrayDistance(array1, array2, system: str):
     from ompl import base as ob
 
-    if hasattr(array1, "flat"):
-        array1 = array1.flat
-    if hasattr(array2, "flat"):
-        array2 = array2.flat
+    # Normalize inputs to flat numpy arrays.
+    array1 = np.asarray(array1, dtype=float).reshape(-1)
+    array2 = np.asarray(array2, dtype=float).reshape(-1)
 
-    if system == "dublin_airplane":
-        # Create SE3 state space matching OMPL's configuration
-        # Use the same weights as in addNoise function: R3=1.0, SO3=0.5
-        r3_space = ob.RealVectorStateSpace(3)
-        so3_space = ob.SO3StateSpace()
-        se3_space = ob.CompoundStateSpace()
-        se3_space.addSubspace(r3_space, 1.0)
-        se3_space.addSubspace(so3_space, 0.5)
-        se3_space.lock()
+    system_alias = {
+        "simple_car": "kinematic_car",
+        "kinematic_car": "kinematic_car",
+        "pushing": "pushing_object",
+        "pushing_object": "pushing_object",
+        "double_integrator": "double_integrator",
+        "position": "position",
+    }
+    system_key = system_alias.get(system, system)
 
-        # Create OMPL states
-        ompl_state1 = se3_space.allocState()
-        ompl_state2 = se3_space.allocState()
-
-        # Set position components
-        ompl_state1[0][0] = array1[0]
-        ompl_state1[0][1] = array1[1]
-        ompl_state1[0][2] = array1[2]
-        ompl_state2[0][0] = array2[0]
-        ompl_state2[0][1] = array2[1]
-        ompl_state2[0][2] = array2[2]
-
-        # Set quaternion components (normalize first)
-        # Input format is [w, x, y, z] at indices [3, 4, 5, 6]
-        quat1_norm = normalize_quaternion([array1[3], array1[4], array1[5], array1[6]])
-        quat2_norm = normalize_quaternion([array2[3], array2[4], array2[5], array2[6]])
-
-        # Handle quaternion sign ambiguity: q and -q represent the same rotation
-        # Choose the sign that minimizes the distance (pick the one with positive w if w != 0)
-        # If w is negative, flip the quaternion
-        if quat1_norm[0] < 0:
-            quat1_norm = [-quat1_norm[0], -quat1_norm[1], -quat1_norm[2], -quat1_norm[3]]
-        if quat2_norm[0] < 0:
-            quat2_norm = [-quat2_norm[0], -quat2_norm[1], -quat2_norm[2], -quat2_norm[3]]
-
-        ompl_state1[1].w = quat1_norm[0]
-        ompl_state1[1].x = quat1_norm[1]
-        ompl_state1[1].y = quat1_norm[2]
-        ompl_state1[1].z = quat1_norm[3]
-        ompl_state2[1].w = quat2_norm[0]
-        ompl_state2[1].x = quat2_norm[1]
-        ompl_state2[1].y = quat2_norm[2]
-        ompl_state2[1].z = quat2_norm[3]
-
-        # Compute distance using OMPL's SE3 state space distance function
-        return se3_space.distance(ompl_state1, ompl_state2)
-
-    elif system == "simple_car" or system == "pushing":
+    if system_key in ("kinematic_car", "pushing_object"):
         # Check if arrays have enough elements for SE2
         if len(array1) < 3 or len(array2) < 3:
             raise ValueError(
@@ -782,7 +741,15 @@ def arrayDistance(array1, array2, system: str):
         # Compute distance using OMPL's SE2 state space distance function
         return se2_space.distance(ompl_state1, ompl_state2)
 
-    elif system == "position":
+    if system_key == "double_integrator":
+        if len(array1) < 6 or len(array2) < 6:
+            raise ValueError(
+                f"double_integrator states need at least 6 elements, got {len(array1)} and {len(array2)}"
+            )
+        # Euclidean distance in R^6.
+        return float(np.linalg.norm(array1[:6] - array2[:6]))
+
+    if system_key == "position":
         # Check if arrays have enough elements for SE2Position
         if len(array1) < 2 or len(array2) < 2:
             raise ValueError(
@@ -792,8 +759,7 @@ def arrayDistance(array1, array2, system: str):
         posDistance = np.sqrt((array1[0] - array2[0]) ** 2 + (array1[1] - array2[1]) ** 2)
         return posDistance
 
-    else:
-        raise ValueError(f"Invalid system: {system}")
+    raise ValueError(f"Invalid system: {system}")
 
 
 def log(message, log_type="info"):
@@ -815,7 +781,7 @@ def log(message, log_type="info"):
 
 def printState(state, system, situation):
     """Print the state in a readable format."""
-    if system == "simple_car" or system == "pushing":
+    if system in ("simple_car", "kinematic_car", "pushing", "pushing_object"):
         print(
             f"       - {situation} State: x={state[0]:.3f}, y={state[1]:.3f}, theta={state[2]:.3f}"
         )
@@ -861,7 +827,7 @@ def addNoise(system, state, pos_std, rot_std):
         # For OMPL state objects, convert to list for comparison
         original_state = state2list(state, system)
 
-    if system == "simple_car" or system == "pushing":
+    if system in ("simple_car", "kinematic_car", "pushing", "pushing_object"):
         # SE2 state: [x, y, theta]
         if is_array:
             # Handle numpy array or list
@@ -1081,7 +1047,7 @@ def addNoise(system, state, pos_std, rot_std):
             # Compute distance using OMPL
             distance_ompl = se3_space.distance(ompl_state1, ompl_state2)
 
-        elif system == "simple_car" or system == "pushing":
+        elif system in ("simple_car", "kinematic_car", "pushing", "pushing_object"):
             # Create SE2 state space
             se2_space = ob.SE2StateSpace()
             bounds = ob.RealVectorBounds(2)

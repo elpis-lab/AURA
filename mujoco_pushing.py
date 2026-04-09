@@ -432,7 +432,10 @@ class Sim:
         times = np.linspace(0, total_time, n_points)
 
         traj = self.ws_path_to_traj(None, times, ws_path)
-        waypoints = traj.to_step_waypoints(self.dt)
+        # `to_step_waypoints` returns (position, velocity, acceleration) with
+        # shape (3, steps, dof). The viewer expects joint positions only.
+        traj_waypoints = traj.to_step_waypoints(self.dt)
+        waypoints = traj_waypoints[0]
 
         self.params.append(push_params)
         self.pos_waypoints.append(waypoints[None, :, :])

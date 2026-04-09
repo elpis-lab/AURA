@@ -231,7 +231,7 @@ def getChildrenStates(ss, targetState, system="simple_car", tolerance=1e-6):
 def sampleRandomState(system, state, numStates=1000, posSTD=0.003, rotSTD=0.05):
     sampledStates = []
 
-    if system == "simple_car" or system == "pushing":
+    if system in ("simple_car", "kinematic_car", "pushing", "pushing_object"):
         # Convert state to list if it's not already
         if hasattr(state, "getX"):  # It's an OMPL state object
             stateList = state2list(state, "SE2")

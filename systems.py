@@ -36,10 +36,11 @@ class kinematicCar(System):
     """SE2 kinematic car system."""
 
     def __init__(self):
+        state_space = ob.SE2StateSpace()
         super().__init__(
             name="kinematic_car",
-            state_space=ob.SE2StateSpace(),
-            control_space=oc.RealVectorControlSpace(self.state_space, 2),
+            state_space=state_space,
+            control_space=oc.RealVectorControlSpace(state_space, 2),
             state_bounds=[(-10.0, 10.0), (-10.0, 10.0)],
             control_bounds=[(-0.2, 0.95), (-0.30, 0.30)],
             dynamics_fn=self.propagator,
@@ -87,10 +88,11 @@ class doubleIntegrator(System):
     """3D double integrator in R^6 with acceleration control in R^3."""
 
     def __init__(self):
+        state_space = ob.RealVectorStateSpace(6)
         super().__init__(
             name="double_integrator",
-            state_space=ob.RealVectorStateSpace(6),
-            control_space=oc.RealVectorControlSpace(self.state_space, 3),
+            state_space=state_space,
+            control_space=oc.RealVectorControlSpace(state_space, 3),
             state_bounds=[
                 (-3.0, 3.0),
                 (-3.0, 3.0),
@@ -142,11 +144,12 @@ class pushingObject(System):
 
     def __init__(self):
         self.object_shape = np.array([0.1628, 0.2139, 0.0676], dtype=float)
+        state_space = ob.SE2StateSpace()
 
         super().__init__(
             name="pushing_object",
-            state_space=ob.SE2StateSpace(),
-            control_space=oc.RealVectorControlSpace(self.state_space, 3),
+            state_space=state_space,
+            control_space=oc.RealVectorControlSpace(state_space, 3),
             state_bounds=[(-0.9, 0.76), (-0.9, -0.3)],
             control_bounds=[(0.0, 4.0), (-0.4, 0.4), (0.0, 0.25)],
             dynamics_fn=self.propagator,

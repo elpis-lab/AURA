@@ -54,7 +54,7 @@ def run_replanning(
     simulator = create_simulator(system_name, simulator_mode, config=config)
 
     simulator.reset()
-    if system_name == "pushing":
+    if system_name == "pushing_object":
         simulator.set_obj_init_pose(np.asarray(config["start_state"], dtype=float).tolist())
 
     start_state = _state_to_numpy(simulator.get_state(), system_name, system.state_dim)
@@ -225,7 +225,7 @@ def main():
     parser.add_argument(
         "system_name",
         type=str,
-        choices=["simple_car", "pushing", "double_integrator"],
+        choices=["kinematic_car", "pushing_object", "double_integrator"],
     )
     parser.add_argument("run_number", type=int)
     parser.add_argument(
@@ -238,8 +238,8 @@ def main():
     args = parser.parse_args()
 
     system_to_config = {
-        "simple_car": "configs/car.yaml",
-        "pushing": "configs/pushing.yaml",
+        "kinematic_car": "configs/car.yaml",
+        "pushing_object": "configs/pushing.yaml",
         "double_integrator": "configs/double_integrator.yaml",
     }
     config = load_and_normalize_config(
@@ -250,14 +250,14 @@ def main():
 
     if args.simulator_mode == "mujoco":
         system_to_folder = {
-            "simple_car": "wholeTime_car",
-            "pushing": "wholeTime_pushing",
+            "kinematic_car": "wholeTime_car",
+            "pushing_object": "wholeTime_pushing",
             "double_integrator": "wholeTime_double",
         }
     else:
         system_to_folder = {
-            "simple_car": "wholeTime_car_gaussian",
-            "pushing": "wholeTime_pushing_gaussian",
+            "kinematic_car": "wholeTime_car_gaussian",
+            "pushing_object": "wholeTime_pushing_gaussian",
             "double_integrator": "wholeTime_double_gaussian",
         }
 

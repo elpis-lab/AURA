@@ -269,9 +269,17 @@ class SE2Pose(Pose):
 
 
 # Helper quaternion functions
-def euler_to_quat(angles: np.ndarray | list[float], degrees: bool = False) -> np.ndarray:
-    """Convert Euler angles to Quaternion (w, x, y, z)"""
-    r = R.from_euler("xyz", angles, degrees=degrees)
+def euler_to_quat(
+    angles: np.ndarray | list[float], seq: str | bool = "xyz", degrees: bool = False
+) -> np.ndarray:
+    """
+    Convert Euler angles to Quaternion (w, x, y, z).
+    Backward-compatible with older call sites that passed (angles, degrees).
+    """
+    if isinstance(seq, bool):
+        degrees = seq
+        seq = "xyz"
+    r = R.from_euler(seq, angles, degrees=degrees)
     return xyzw_to_wxyz(r.as_quat())
 
 
@@ -301,3 +309,35 @@ def angle_diff(a: float, b: float) -> float:
 def wrap_to_pi(angle: float) -> float:
     """Wrap an angle to the range [-pi, pi]"""
     return (angle + np.pi) % (2 * np.pi) - np.pi
+
+
+def quat_to_matrix(quat: np.ndarray | list[float]) -> np.ndarray:
+    """Quaternion (w, x, y, z) to rotation matrix, supports batch shapes (..., 4)."""
+    quat = np.asarray(quat)
+    r = R.from_quat(wxyz_to_xyzw(quat))
+    return r.as_matrix()
+
+
+def matrix_to_quat(matrix: np.ndarray) -> np.ndarray:
+    """Rotation matrix to quaternion (w, x, y, z), supports batch shapes (..., 3, 3)."""
+    matrix = np.asarray(matrix)
+    r = R.from_matrix(matrix)
+    return xyzw_to_wxyz(r.as_quat())
+
+
+def flat_to_matrix(pose_flat: np.ndarray | list[float]) -> np.ndarray:
+    """
+    Convert flat pose(s) [x, y, z, qw, qx, qy, qz] to homogeneous matrix/matrices.
+    Input shape: (7,) or (..., 7) -> output shape: (4,4) or (..., 4,4).
+    """
+    pose_flat = np.asarray(pose_flat, dtype=float)
+    single = pose_flat.ndim == 1
+    poses = pose_flat.reshape(-1, 7)
+
+    t = np.broadcast_to(np.eye(4), (poses.shape[0], 4, 4)).copy()
+    t[:, :3, :3] = quat_to_matrix(poses[:, 3:7])
+    t[:, :3, 3] = poses[:, :3]
+
+    if single:
+        return t[0]
+    return t.reshape(*pose_flat.shape[:-1], 4, 4)

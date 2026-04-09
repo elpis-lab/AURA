@@ -21,12 +21,12 @@ def get_pushing_model(object_shape):
     ):
         model = load_model("mlp", object_shape)
 
-        model_path = "saved_models/cracker_box_flipped_mlp_0.0_1000_0.pth"
+        model_path = "learned_models/cracker_box_flipped_mlp_0.0_1000_0.pth"
 
         current_dir = os.path.dirname(os.path.abspath(__file__))
         aura_dir = os.path.dirname(current_dir)
         relative_path = os.path.join(
-            aura_dir, "saved_models", "cracker_box_flipped_mlp_0.0_1000_0.pth"
+            aura_dir, "learned_models", "cracker_box_flipped_mlp_0.0_1000_0.pth"
         )
 
         if os.path.exists(model_path):
