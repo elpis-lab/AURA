@@ -9,7 +9,8 @@ from ompl import base as ob
 from ompl import control as oc
 
 from geometry.pose import SE2Pose
-from pushing_dynamics import get_pushing_model
+from simulation.pushing_object_specs import CRACKER_BOX_FLIPPED_SHAPE
+from simulation.pushing_dynamics import get_pushing_model
 
 
 @dataclass
@@ -143,7 +144,9 @@ class pushingObject(System):
     """SE2 pushing system with learned-model dynamics."""
 
     def __init__(self):
-        self.object_shape = np.array([0.1628, 0.2139, 0.0676], dtype=float)
+        self.object_shape = CRACKER_BOX_FLIPPED_SHAPE.copy()
+        self.model_name = "cracker_box_flipped"
+        self.model_path = None
         state_space = ob.SE2StateSpace()
 
         super().__init__(
@@ -151,7 +154,7 @@ class pushingObject(System):
             state_space=state_space,
             control_space=oc.RealVectorControlSpace(state_space, 3),
             state_bounds=[(-0.9, 0.76), (-0.9, -0.3)],
-            control_bounds=[(0.0, 4.0), (-0.4, 0.4), (0.0, 0.25)],
+            control_bounds=[(0.0, 0.75), (-0.4, 0.4), (0.0, 0.25)],
             dynamics_fn=self.propagator,
             propagator_fn=self.ompl_propagator,
         )
@@ -167,9 +170,38 @@ class pushingObject(System):
             bounds.setHigh(i, float(high))
         self.control_space.setBounds(bounds)
 
+    def _canonical_control(self, control: np.ndarray) -> np.ndarray:
+        control = np.asarray(control, dtype=float).reshape(-1).copy()
+        if control.size < 3:
+            raise ValueError(f"pushing_object control must have 3 values, got {control}")
+
+        face_raw = float(control[0])
+        normalized_faces = np.array([0.0, 0.25, 0.5, 0.75], dtype=float)
+        rad_faces = np.array([0.0, np.pi / 2.0, np.pi, 3.0 * np.pi / 2.0])
+        if 0.0 <= face_raw <= 0.75:
+            face_idx = int(np.round(face_raw * 4.0)) % 4
+        elif abs(face_raw - round(face_raw)) < 1e-9 and 0 <= round(face_raw) <= 3:
+            face_idx = int(round(face_raw)) % 4
+        elif np.min(np.abs(face_raw - rad_faces)) < 1e-6:
+            face_idx = int(np.argmin(np.abs(face_raw - rad_faces)))
+        elif 0.0 <= face_raw < 4.0:
+            face_idx = int(face_raw) % 4
+        else:
+            face_idx = int(face_raw / (np.pi / 2.0)) % 4
+
+        control[0] = normalized_faces[face_idx]
+        control[1] = float(np.clip(control[1], -0.4, 0.4))
+        control[2] = float(np.clip(control[2], 0.0, 0.30))
+        return control[:3]
+
     def propagator(self, start: np.ndarray, control: np.ndarray, duration: float) -> np.ndarray:
         """Pushing object propagation."""
-        model = get_pushing_model(self.object_shape)
+        control = self._canonical_control(control)
+        model = get_pushing_model(
+            self.object_shape,
+            model_name=getattr(self, "model_name", "cracker_box_flipped"),
+            model_path=getattr(self, "model_path", None),
+        )
         device = next(model.parameters()).device
         control_tensor = torch.tensor(
             [[float(control[0]), float(control[1]), float(control[2])]],
@@ -222,6 +254,12 @@ def system_dynamics_torch_wrapper(system_ctor, doc: str):
 
 
 def get_system(system_name: str) -> System:
+    system_name = {
+        "simple_car": "kinematic_car",
+        "car": "kinematic_car",
+        "pushing": "pushing_object",
+        "push": "pushing_object",
+    }.get(str(system_name).lower(), str(system_name).lower())
     if system_name == "kinematic_car":
         return kinematicCar()
     if system_name == "double_integrator":
