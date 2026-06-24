@@ -676,7 +676,10 @@ def _plot_tracking_errors(
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.show()
+    if "agg" in plt.get_backend().lower():
+        plt.close()
+    else:
+        plt.show()
 
 
 def _plot_average_tracking_errors(
@@ -700,7 +703,10 @@ def _plot_average_tracking_errors(
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.show()
+    if "agg" in plt.get_backend().lower():
+        plt.close()
+    else:
+        plt.show()
 
 
 def main():

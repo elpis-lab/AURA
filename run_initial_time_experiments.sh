@@ -41,10 +41,31 @@ echo "  config:  ${CONFIG_FILE}"
 echo "  timeout: ${RUN_TIMEOUT_SECONDS}s"
 echo
 
-exec timeout "${RUN_TIMEOUT_SECONDS}" \
+cmd=(
     "${PYTHON_BIN}" "${ROOT_DIR}/experiments/initial_time_experiment.py" \
     --config "${CONFIG_FILE}" \
     --fill-missing-replays \
     --workspace-replay \
     --no-show \
     "$@"
+)
+
+timeout "${RUN_TIMEOUT_SECONDS}" "${cmd[@]}"
+
+missing_file="$(mktemp "${TMPDIR:-/tmp}/aura_initial_missing.XXXXXX.tsv")"
+trap 'rm -f "${missing_file}"' EXIT
+
+"${cmd[@]}" --dry-run-missing --missing-replays-file "${missing_file}" >/dev/null
+missing_count=0
+if [[ -f "${missing_file}" ]]; then
+    while IFS= read -r _line; do
+        missing_count=$((missing_count + 1))
+    done < "${missing_file}"
+fi
+
+if (( missing_count > 0 )); then
+    echo "[ERROR] Initial-time run finished with ${missing_count} missing replay slot(s)."
+    exit 1
+fi
+
+echo "Initial-time replay grid complete."
