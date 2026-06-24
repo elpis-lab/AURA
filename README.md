@@ -4,13 +4,39 @@
   <img src="docs/overview.png" alt="AURA main result" width="100%">
 </p>
 <p align="center">
-  <img src="docs/replanning.png" alt="AURA replanning result" height="320">
-  &nbsp;&nbsp;
-  <img src="docs/optimization.png" alt="AURA optimization result" height="320">
+  <img src="docs/replanning_optimization.png" alt="AURA replanning and optimization results" width="90%">
 </p>
 AURA is a meta-planner framework for kinodynamic motion planning under motion uncertainty. It combines an asymptotically optimal sampling-based planner with online replanning and local control optimization, so execution can keep improving the planned trajectory while correcting tracking error.
 
 Paper: [AURA: Asymptotically Optimal Uncertainty-Robust Replanning Algorithm for Kinodynamic Systems](https://arxiv.org/abs/2605.27699)
+
+## Contents
+
+1. [Repository Layout](#repository-layout)
+2. [Main Algorithm Files](#main-algorithm-files)
+   - [AURA.py](#aurapy)
+   - [optimization.py](#optimizationpy)
+   - [plan.py](#planpy)
+   - [Replanning.py](#replanningpy)
+   - [systems.py](#systemspy)
+3. [Folders](#folders)
+   - [configs](#configs)
+   - [experiments](#experiments)
+   - [simulation](#simulation)
+   - [real_world](#real_world)
+   - [geometry](#geometry)
+   - [models](#models)
+   - [learned_models](#learned_models)
+   - [scripts](#scripts)
+   - [utils](#utils)
+4. [Evaluation](#evaluation)
+   - [Cost Comparison](#cost-comparison)
+   - [Tracking-Error Evaluation](#tracking-error-evaluation)
+   - [Wall-Time Evaluation](#wall-time-evaluation)
+   - [Hyperparameter Analysis](#hyperparameter-analysis)
+   - [Real-World Execution](#real-world-execution)
+5. [Results](#results)
+6. [Notes](#notes)
 
 ## Repository Layout
 ```text
@@ -223,31 +249,23 @@ Real-world execution is not wrapped by a root bash script because it requires ha
 
 ## Results
 ### Cost Comparison
-![Cost comparison](docs/results/costComparison.png)
+<p align="center">
+  <img src="docs/results/costComparison.png" alt="Cost comparison" width="100%">
+</p>
 
 ### Wall-Time Evaluation
-![Wall-time comparison](docs/results/wallTimeComparison.png)
+<p align="center">
+  <img src="docs/results/wallTimeComparison.png" alt="Wall-time comparison" width="100%">
+</p>
 
 ### Hyperparameters Analysis
-![Initial-time sweep summary](docs/results/hyperparameterStudy.png)
+<p align="center">
+  <img src="docs/results/hyperparameterStudy.png" alt="Initial-time sweep summary" width="100%">
+</p>
 
 ### MuJoCo / Simulation Videos
 ![MuJoCo method visualization](docs/results/mujoco_visualization.png)
 
-
-## Typical Development Workflow
-1. Edit planner/system/AURA code.
-2. Run syntax checks:
-
-   ```bash
-   bash -n run_initial_time_experiments.sh run_performance_experiments.sh run_error_experiments.sh
-   python -m py_compile AURA.py Replanning.py systems.py optimization.py plan.py
-   ```
-
-3. Run the smallest useful experiment commands from the option templates above. For example, set `[N]` to `1`, use one planner, and use short planning/control durations.
-
-4. Inspect generated CSV/plot/replay files under `results/`.
-5. Run the larger configured sweeps only after the small runs pass.
 
 ## Notes
 - MuJoCo assets live under `simulation/assets/`.
