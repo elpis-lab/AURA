@@ -9,7 +9,8 @@ import numpy as np
 
 DEFAULT_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "initial_time_experiment_config.yaml",
+    "configs",
+    "initial_time_experiment.yaml",
 )
 
 DEFAULT_CONFIG = {

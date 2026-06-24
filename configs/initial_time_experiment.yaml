@@ -1,0 +1,7 @@
+# Initial-time AURA sweep config.
+# Use CLI overrides for alternate runs instead of creating separate config files.
+planner_name: aorrt
+results_dir: results/planning/initial_time_car_gaussian
+control_durations: [1, 2, 3, 4, 5]
+planning_times: [3, 6, 9, 12, 15]
+num_runs: 10
