@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 import numpy as np
 import mujoco
 import mujoco.viewer
@@ -202,7 +203,7 @@ class UR10IK(IK):
 
 def test_ik():
     # Initialize IK
-    xml = "assets/ur10_rod_ik.xml"
+    xml = str(Path(__file__).resolve().parent / "assets" / "ur10_rod_ik.xml")
     ik = UR10IK(xml)
 
     # Launch Sim

@@ -14,7 +14,7 @@ from optimization import runOptimizer
 from systems import System
 from plan import OMPL_Planner
 from utils.childrenHandler import getChildrenStates
-from simulators import Simulator
+from simulation.simulators import Simulator
 from utils.utils import (
     arrayDistance,
     is_state_array_valid,

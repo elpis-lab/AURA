@@ -43,14 +43,14 @@ from geometry.object_model import get_obj_shape
 from geometry.pose import Pose, matrix_to_quat
 from geometry.random_push import generate_path_form_params
 from plan import OMPL_Planner
-from pushing_dynamics import get_pushing_model
+from simulation.pushing_dynamics import get_pushing_model
 from experiments.real_error_experiment import (
     _wrap_angle,
     matrix_to_flat,
     project_se3_pose,
 )
 from real_world.physical_robot import PhysicalUR10
-from simulators import Simulator
+from simulation.simulators import Simulator
 from systems import get_system
 from train_model import load_opt_model_2
 from utils.utils import arrayDistance
@@ -942,7 +942,7 @@ def run_real_execution(args: argparse.Namespace) -> dict:
 
     goal = np.asarray(args.goal, dtype=float).reshape(3)
     rough_detect_pose = np.asarray(args.rough_detect_pose, dtype=float)
-    obj_shape = get_obj_shape(f"assets/{args.obj_name}/textured.obj")
+    obj_shape = get_obj_shape(f"simulation/assets/{args.obj_name}/textured.obj")
     system.object_shape = np.asarray(obj_shape, dtype=float).copy()
     system.model_name = str(args.model_name)
     system.model_path = args.model_path

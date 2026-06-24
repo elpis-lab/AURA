@@ -25,8 +25,8 @@ import numpy as np
 
 from AURA import AURA
 from optimization import runOptimizer
-from pushing_dynamics import get_pushing_model
-from simulators import create_simulator
+from simulation.pushing_dynamics import get_pushing_model
+from simulation.simulators import create_simulator
 from systems import get_system
 from train_model import load_opt_model_2
 from utils.utils import arrayDistance

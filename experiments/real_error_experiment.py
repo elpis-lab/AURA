@@ -34,7 +34,7 @@ from geometry.object_model import get_obj_shape
 from geometry.pose import Pose, flat_to_matrix, matrix_to_quat
 from geometry.random_push import generate_path_form_params
 from optimization import runOptimizer
-from pushing_dynamics import get_pushing_model
+from simulation.pushing_dynamics import get_pushing_model
 from real_world.physical_robot import PhysicalUR10
 from systems import get_system
 from train_model import load_opt_model_2
@@ -499,7 +499,7 @@ def save_results(out_dir: Path, rows: list[RealStepResult], metadata: dict) -> N
 def run_real_error_experiment(args: argparse.Namespace) -> dict:
     rng = np.random.default_rng(args.seed)
     system = get_system("pushing_object")
-    obj_shape = get_obj_shape(f"assets/{args.obj_name}/textured.obj")
+    obj_shape = get_obj_shape(f"simulation/assets/{args.obj_name}/textured.obj")
     opt_model = load_opt_model_2(
         get_pushing_model(system.object_shape),
         lr=float(args.optimizer_learning_rate),

@@ -217,10 +217,10 @@ if __name__ == "__main__":
         "trash_truck",
     ]:
         obj = ObjectPointCloud(
-            f"assets/{obj}/textured.obj",
+            f"simulation/assets/{obj}/textured.obj",
             num_points=100,
             slice_z=True,
             slice_height=0.0,
         )
-        # obj = ObjectPointCloud("assets/letter_t/textured.obj", num_points=180)
+        # obj = ObjectPointCloud("simulation/assets/letter_t/textured.obj", num_points=180)
         obj.show()

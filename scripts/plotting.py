@@ -34,7 +34,7 @@ from matplotlib.patches import Circle, FancyArrowPatch, Polygon, Rectangle
 
 from AURA import AURA
 from plan import OMPL_Planner
-from simulators import create_simulator
+from simulation.simulators import create_simulator
 from systems import get_system
 from utils.utils import normalize_obstacle_config, sample_piecewise_control_curve
 

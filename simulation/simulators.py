@@ -1,17 +1,31 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Optional
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
 
-from mujoco_car import Sim as MujocoCarSimulator
-from mujoco_pushing import Sim as MujocoPushingSimulator
 from systems import kinematicCar, doubleIntegrator, pushingObject
 from utils.utils import addNoise
+
+try:
+    from simulation.mujoco_car import Sim as MujocoCarSimulator
+except ImportError:
+    MujocoCarSimulator = None
+
+try:
+    from simulation.mujoco_pushing import Sim as MujocoPushingSimulator
+except ImportError:
+    MujocoPushingSimulator = None
 
 
 class Simulator(ABC):
@@ -158,7 +172,15 @@ class KinematicCarMujoco(Simulator):
 
     def __init__(self, config: Optional[dict] = None):
         super().__init__("kinematic_car", config=config)
+        if MujocoCarSimulator is None:
+            raise ImportError("mujoco is required for kinematic_car mujoco simulation mode")
         self.simulator = MujocoCarSimulator()
+        self.simulator.throttle_ctrl_scale = float(
+            self.config.get("mujoco_car_throttle_ctrl_scale", self.simulator.throttle_ctrl_scale)
+        )
+        self.simulator.steering_ctrl_scale = float(
+            self.config.get("mujoco_car_steering_ctrl_scale", self.simulator.steering_ctrl_scale)
+        )
         self._viewer_thread = None
         self._start_viewer_thread()
 
@@ -176,7 +198,7 @@ class KinematicCarMujoco(Simulator):
     def reset(self):
         self._start_viewer_thread()
         self.simulator.reset()
-        self.current_state = np.asarray(self.simulator.get_state(), dtype=float)
+        self.current_state = np.asarray(self.simulator.get_state(), dtype=float).reshape(-1)[:3]
         self.running = True
         return self.get_state()
 
@@ -187,9 +209,17 @@ class KinematicCarMujoco(Simulator):
             return self.get_state()
         self._start_viewer_thread()
         self.simulator.execute_segment(control_np, duration)
-        self.current_state = np.asarray(self.simulator.get_state(), dtype=float)
+        self.current_state = np.asarray(self.simulator.get_state(), dtype=float).reshape(-1)[:3]
         self.running = True
         return self.get_state()
+
+    def close(self):
+        self.running = False
+        try:
+            self.simulator.close()
+        finally:
+            if self._viewer_thread is not None and self._viewer_thread.is_alive():
+                self._viewer_thread.join(timeout=5.0)
 
 
 class PushingObjectMujoco(Simulator):
@@ -197,6 +227,8 @@ class PushingObjectMujoco(Simulator):
 
     def __init__(self, config: Optional[dict] = None):
         super().__init__("pushing_object", config=config)
+        if MujocoPushingSimulator is None:
+            raise ImportError("mujoco is required for pushing_object mujoco simulation mode")
         self.simulator = MujocoPushingSimulator()
         self._viewer_thread = None
         self._start_viewer_thread()
@@ -239,6 +271,14 @@ class PushingObjectMujoco(Simulator):
         self.running = True
         return self.get_state()
 
+    def close(self):
+        self.running = False
+        try:
+            self.simulator.close()
+        finally:
+            if self._viewer_thread is not None and self._viewer_thread.is_alive():
+                self._viewer_thread.join(timeout=5.0)
+
 
 def create_simulator(
     system_name: str,
@@ -252,6 +292,12 @@ def create_simulator(
     """
     mode = mode.lower()
     system_name = system_name.lower()
+    system_name = {
+        "simple_car": "kinematic_car",
+        "car": "kinematic_car",
+        "pushing": "pushing_object",
+        "push": "pushing_object",
+    }.get(system_name, system_name)
 
     if mode == "gaussian":
         if system_name == "kinematic_car":

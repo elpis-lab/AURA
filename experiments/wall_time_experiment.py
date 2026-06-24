@@ -28,7 +28,7 @@ os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 from AURA import AURA
 from plan import OMPL_Planner
-from simulators import create_simulator
+from simulation.simulators import create_simulator
 from systems import get_system
 from utils.utils import arrayDistance
 

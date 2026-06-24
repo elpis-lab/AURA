@@ -97,7 +97,7 @@ from utils.auraHandler import reset_optimizer_loss_live_figure
 from utils.configHandler import DEFAULT_CONFIG_PATH, load_experiment_config
 from optimization import optimizer_device_info, warmup_optimizer_device
 from plan import OMPL_Planner
-from simulators import create_simulator
+from simulation.simulators import create_simulator
 from systems import get_system
 from utils.utils import arrayDistance, is_state_array_valid, normalize_obstacle_config
 
