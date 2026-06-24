@@ -5,8 +5,20 @@ from ompl import base as ob
 from ompl import util as ou
 from ompl import control as oc
 
+# When the discrete plan state is not exactly equal to a tree vertex (float drift
+# after replan / path extraction), still attach branch controls if the closest
+# vertex is within this OMPL state-space distance.
+DEFAULT_NEAREST_VERTEX_MAX_DIST = 0.25
 
-def getChildrenStates(ss, targetState, system="simple_car", tolerance=1e-6):
+
+def getChildrenStates(
+    ss,
+    targetState,
+    system="simple_car",
+    tolerance=1e-6,
+    nearest_match_max_dist: float | None = DEFAULT_NEAREST_VERTEX_MAX_DIST,
+    return_metadata: bool = False,
+):
     """
     Extract children states and their corresponding controls from the OMPL planner tree.
 
@@ -15,11 +27,26 @@ def getChildrenStates(ss, targetState, system="simple_car", tolerance=1e-6):
         targetState: The target state to find children for
         system: The system type ("SE2" or "SE3") to determine state format
         tolerance: Tolerance for state comparison
+        nearest_match_max_dist: If no exact vertex match, use the closest vertex when its
+            OMPL distance is at most this value. ``None`` disables (strict exact match only).
 
     Returns:
-        tuple: (children_states, children_controls)
+        tuple: (children_states, children_controls), or
+        (children_states, children_controls, metadata) when return_metadata is True.
     """
-    print(f"[INFO] Getting children states for system: {system}")
+    metadata = {
+        "match": "none",
+        "vertex_index": None,
+        "nearest_distance": float("inf"),
+        "num_vertices": 0,
+        "num_children": 0,
+    }
+
+    def _return(children_states, children_controls):
+        metadata["num_children"] = len(children_states)
+        if return_metadata:
+            return children_states, children_controls, metadata
+        return children_states, children_controls
 
     # Get planner data
     planner_data = oc.PlannerData(ss.getSpaceInformation())
@@ -27,16 +54,14 @@ def getChildrenStates(ss, targetState, system="simple_car", tolerance=1e-6):
     planner.getPlannerData(planner_data)
 
     num_vertices = planner_data.numVertices()
-    print(f"[INFO] Planner tree has {num_vertices} vertices")
+    metadata["num_vertices"] = int(num_vertices)
 
     if num_vertices == 0:
         log("[WARNING] Planner tree is empty", "warning")
-        return [], []
+        return _return([], [])
 
     # Search for the target state
     targetVertexIdx = None
-    print(f"[DEBUG] Searching for targetState: {targetState}")
-    print(f"[DEBUG] Target state type: {type(targetState)}")
 
     # Enhanced debug for dublin_airplane system
     if system == "dublin_airplane":
@@ -49,7 +74,6 @@ def getChildrenStates(ss, targetState, system="simple_car", tolerance=1e-6):
                 f"[DEBUG] [DUBLIN_AIRPLANE] Target quat: [{targetState[3]:.6f}, {targetState[4]:.6f}, {targetState[5]:.6f}, {targetState[6]:.6f}]"
             )
 
-    print(f"[DEBUG] First 10 planner vertices:")
     # for i in range(min(10, num_vertices)):
     #     state = planner_data.getVertex(i).getState()
     #     state_list = state2list(state, system)
@@ -60,14 +84,16 @@ def getChildrenStates(ss, targetState, system="simple_car", tolerance=1e-6):
     #     else:
     #         print(f"[DEBUG]   Vertex {i}: {state_list}")
 
-    print(f"[DEBUG] Searching through {num_vertices} vertices with tolerance: {tolerance}")
     for i in range(num_vertices):
         state = planner_data.getVertex(i).getState()
         state_list = state2list(state, system)
 
         if isStateEqual(state_list, targetState, system, tolerance):
             targetVertexIdx = i
-            print(f"[INFO] Found target state at vertex index: {i}")
+            metadata["match"] = "exact"
+            metadata["vertex_index"] = int(i)
+            metadata["nearest_distance"] = 0.0
+            # matched
             if system == "dublin_airplane":
                 print(f"[DEBUG] [DUBLIN_AIRPLANE] Match found:")
                 print(
@@ -85,11 +111,6 @@ def getChildrenStates(ss, targetState, system="simple_car", tolerance=1e-6):
             break
 
     if targetVertexIdx is None:
-        log(
-            f"[WARNING] State {targetState} not found in planner tree",
-            "warning",
-        )
-
         # Enhanced debug output for dublin_airplane
         if system == "dublin_airplane":
             print(f"[DEBUG] [DUBLIN_AIRPLANE] Detailed comparison with first 10 vertices:")
@@ -140,7 +161,7 @@ def getChildrenStates(ss, targetState, system="simple_car", tolerance=1e-6):
                 )
 
         # Also check if any vertex is close to the target
-        print(f"[DEBUG] Checking for close matches (tolerance: {tolerance}):")
+        # debug output intentionally suppressed in normal runs
         min_distance = float("inf")
         closest_vertex = None
         closest_vertices = []  # Store top 5 closest
@@ -160,9 +181,10 @@ def getChildrenStates(ss, targetState, system="simple_car", tolerance=1e-6):
                 closest_vertices = closest_vertices[:5]
 
         closest_vertices.sort(key=lambda x: x[2])
+        metadata["nearest_distance"] = float(min_distance)
 
         if closest_vertex:
-            print(f"[INFO] Closest vertex: {closest_vertex[1]} (distance: {min_distance:.6f})")
+            metadata["vertex_index"] = int(closest_vertex[0])
             if system == "dublin_airplane":
                 print(f"[DEBUG] [DUBLIN_AIRPLANE] Closest vertex breakdown:")
                 print(f"[DEBUG]   Index: {closest_vertex[0]}")
@@ -187,13 +209,29 @@ def getChildrenStates(ss, targetState, system="simple_car", tolerance=1e-6):
                     f"[DEBUG]     pos=[{state_list[0]:.6f}, {state_list[1]:.6f}, {state_list[2]:.6f}] quat=[{state_list[3]:.6f}, {state_list[4]:.6f}, {state_list[5]:.6f}, {state_list[6]:.6f}]"
                 )
 
-        return [], []
+        if (
+            nearest_match_max_dist is not None
+            and closest_vertex is not None
+            and min_distance <= float(nearest_match_max_dist)
+        ):
+            targetVertexIdx = closest_vertex[0]
+            metadata["match"] = "nearest"
+        else:
+            log(
+                f"[WARNING] State {targetState} not found in planner tree",
+                "warning",
+            )
+            if closest_vertex:
+                log(
+                    f"[WARNING] Closest vertex distance to target: {min_distance:.6f}",
+                    "warning",
+                )
+            return _return([], [])
 
     # print(f"🔍 Getting edges for vertex {targetVertexIdx}...")
     childVertexIndices = ou.vectorUint()
     planner_data.getEdges(targetVertexIdx, childVertexIndices)
 
-    print(f"[INFO] Found {len(childVertexIndices)} child vertices")
 
     children_states = []
     children_controls = []
@@ -217,15 +255,15 @@ def getChildrenStates(ss, targetState, system="simple_car", tolerance=1e-6):
             # print(f"   Child {childVertexIdx}: Control: {control_values}")
 
         except Exception as e:
-            print(f"   [WARNING] Could not get control for edge to child {childVertexIdx}: {e}")
+            log(
+                f"[WARNING] Could not get control for edge to child {childVertexIdx}: {e}",
+                "warning",
+            )
             # Use a fallback control if the direct method fails
             fallback_control = [1.0, 0.0, 0.1]
             children_controls.append(fallback_control)
 
-    print(
-        f"[INFO] Returning {len(children_states)} children states and {len(children_controls)} controls"
-    )
-    return children_states, children_controls
+    return _return(children_states, children_controls)
 
 
 def sampleRandomState(system, state, numStates=1000, posSTD=0.003, rotSTD=0.05):

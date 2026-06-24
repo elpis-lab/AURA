@@ -1,8 +1,13 @@
 import sys
+import os
 import torch
 import argparse
 import warnings
 import numpy as np
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/aura_matplotlib")
+os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
 import matplotlib.pyplot as plt
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -505,6 +510,136 @@ def isStateValid(spaceInformation, state, system=None, config=None, obstacle_con
     return True
 
 
+def _state_xy_from_array(state) -> np.ndarray | None:
+    try:
+        state_np = np.asarray(state, dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if state_np.size < 2:
+        return None
+    return state_np[:2]
+
+
+def _xy_is_obstacle_free(
+    pos: np.ndarray,
+    obstacle_config,
+    *,
+    safety_radius_override: float | None = None,
+) -> bool:
+    if obstacle_config is None or not obstacle_config.get("enabled", False):
+        return True
+
+    safety_radius = (
+        float(obstacle_config.get("safety_radius", 0.10))
+        if safety_radius_override is None
+        else float(safety_radius_override)
+    )
+
+    for cx, cy, r in obstacle_config.get("circles", []):
+        if np.hypot(float(pos[0]) - float(cx), float(pos[1]) - float(cy)) < (
+            float(r) + safety_radius
+        ):
+            return False
+
+    for xmin, ymin, xmax, ymax in obstacle_config.get("aabbs", []):
+        if (
+            float(xmin) - safety_radius <= float(pos[0]) <= float(xmax) + safety_radius
+            and float(ymin) - safety_radius <= float(pos[1]) <= float(ymax) + safety_radius
+        ):
+            return False
+
+    for cx, cy, hx, hy, yaw in obstacle_config.get("boxes", []):
+        c, s = np.cos(-float(yaw)), np.sin(-float(yaw))
+        px = float(pos[0]) - float(cx)
+        py = float(pos[1]) - float(cy)
+        plx = c * px - s * py
+        ply = s * px + c * py
+        if abs(plx) < float(hx) + safety_radius and abs(ply) < float(hy) + safety_radius:
+            return False
+
+    return True
+
+
+def is_state_array_valid(
+    state,
+    system=None,
+    config=None,
+    obstacle_config=None,
+    *,
+    safety_radius_override: float | None = None,
+) -> bool:
+    """Numpy/list version of isStateValid for sampled execution and plotting checks."""
+    state_np = np.asarray(state, dtype=float).reshape(-1)
+    pos = _state_xy_from_array(state_np)
+    if pos is None:
+        return True
+
+    cfg = config or {}
+    bounds = cfg.get("state_bounds")
+    if bounds is not None and len(bounds) >= 2:
+        x, y = float(pos[0]), float(pos[1])
+        if x < float(bounds[0][0]) or x > float(bounds[0][1]):
+            return False
+        if y < float(bounds[1][0]) or y > float(bounds[1][1]):
+            return False
+
+    occ = normalize_obstacle_config(obstacle_config or cfg.get("obstacles"))
+    return _xy_is_obstacle_free(pos, occ, safety_radius_override=safety_radius_override)
+
+
+def sample_control_curve(
+    system,
+    start_state,
+    control,
+    duration: float,
+    step_size: float,
+    *,
+    include_start: bool = False,
+) -> list[np.ndarray]:
+    """Sample the kinodynamic curve produced by repeatedly propagating one control."""
+    duration = float(duration)
+    step_size = max(float(step_size), 1e-9)
+    state = np.asarray(start_state, dtype=float).reshape(-1).copy()
+    control_np = np.asarray(control, dtype=float).reshape(-1)
+    samples = [state.copy()] if include_start else []
+    if duration <= 0.0:
+        return samples
+
+    n_steps = max(1, int(np.ceil(duration / step_size)))
+    dt = duration / n_steps
+    for _ in range(n_steps):
+        state = np.asarray(system.propagate(state, control_np, dt), dtype=float).reshape(-1)
+        samples.append(state.copy())
+    return samples
+
+
+def sample_piecewise_control_curve(
+    system,
+    states,
+    controls,
+    durations,
+    step_size: float,
+) -> list[np.ndarray]:
+    """Dense curve for a path dictionary with states/controls/time arrays."""
+    if not states:
+        return []
+    curve = [np.asarray(states[0], dtype=float).reshape(-1).copy()]
+    for i, control in enumerate(controls or []):
+        if i >= len(states):
+            break
+        duration = float(durations[i]) if durations is not None and i < len(durations) else step_size
+        segment = sample_control_curve(
+            system,
+            curve[-1],
+            control,
+            duration,
+            step_size,
+            include_start=False,
+        )
+        curve.extend(segment)
+    return curve
+
+
 def normalize_obstacle_config(obstacle_config):
     """
     Normalize obstacle config by auto-enabling obstacle checks when
@@ -528,6 +663,16 @@ def state2list(state, state_type: str) -> list:
     if state_type in ("simple_car", "kinematic_car", "pushing", "pushing_object"):
         # SE2 state: x, y, theta
         return [state.getX(), state.getY(), state.getYaw()]
+
+    if state_type == "double_integrator":
+        try:
+            return [float(state[i]) for i in range(6)]
+        except (TypeError, IndexError, ValueError) as e:
+            print(
+                f"Warning: Could not access double_integrator state components "
+                f"for type {type(state)}, error: {e}"
+            )
+            return []
 
     elif state_type == "dublin_airplane":
         # SE3 state: x, y, z, qw, qx, qy, qz (position + quaternion)

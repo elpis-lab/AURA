@@ -153,7 +153,9 @@ class TorchModel:
     def load(self, path, **kwargs):
         """Load model"""
         self.model = self.model_class(**kwargs).to(self.device)
-        self.model.load_state_dict(torch.load(path, weights_only=True))
+        self.model.load_state_dict(
+            torch.load(path, weights_only=True, map_location=self.device)
+        )
 
 
 class OptTorchModel:
