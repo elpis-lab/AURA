@@ -1,12 +1,12 @@
 # AURA: Asymptotically-Optimal Uncertainty-Robust Replanning Algorithm for Kinodynamic Systems
 
 <p align="center">
-  <img src="docs/overview.png" alt="AURA main result" width="100%" style="border-radius: 8px;">
+  <img src="docs/overview.png" alt="AURA main result" width="100%">
 </p>
 <p align="center">
-  <img src="docs/replanning.png" alt="AURA replanning result" height="300" style="border-radius: 8px;">
+  <img src="docs/replanning.png" alt="AURA replanning result" height="320">
   &nbsp;&nbsp;
-  <img src="docs/optimization.png" alt="AURA optimization result" height="300" style="border-radius: 8px;">
+  <img src="docs/optimization.png" alt="AURA optimization result" height="320">
 </p>
 AURA is a meta-planner framework for kinodynamic motion planning under motion uncertainty. It combines an asymptotically optimal sampling-based planner with online replanning and local control optimization, so execution can keep improving the planned trajectory while correcting tracking error.
 
@@ -83,7 +83,7 @@ The runner scripts load these configs by default, but terminal arguments can ove
 
 ### `experiments/`
 Evaluation scrips:
-- `cost_comparison.py`: compares planner solution costs over different offline planning-time budgets,
+- `cost_comparison_experiment.py`: compares planner solution costs over different offline planning-time budgets,
 - `error_experiment.py`: compares open-loop tracking error against optimized-control,
 - `real_error_experiment.py`: real-robot version of the tracking-error experiment,
 - `wall_time_experiment.py`: compares wall-time performance of AURA and RestartReplanning,
@@ -156,7 +156,7 @@ The commands below use option templates. Replace bracketed values such as `[aorr
 ### Cost Comparison
 Compares planner solution costs over different offline planning-time budgets.
 ```bash
-python experiments/cost_comparison.py \
+python experiments/cost_comparison_experiment.py \
   --planner-name [aorrt|aoest|sststar|all] \
   --planning-times [SECONDS] \
   --num-runs [N] \
@@ -225,20 +225,15 @@ Real-world execution is not wrapped by a root bash script because it requires ha
 ### Cost Comparison
 ![Cost comparison](docs/results/costComparison.png)
 
-### Hyperparameters Analysis
-![Initial-time sweep summary](docs/results/initial_time_sweep.png)
-
 ### Wall-Time Evaluation
-![Wall-time comparison](docs/results/wall_time_comparison.png)
+![Wall-time comparison](docs/results/wallTimeComparison.png)
 
-### Tracking-Error Evaluation
-![Tracking-error comparison](docs/results/tracking_error_comparison.png)
+### Hyperparameters Analysis
+![Initial-time sweep summary](docs/results/hyperparameterStudy.png)
 
 ### MuJoCo / Simulation Videos
 ![MuJoCo method visualization](docs/results/mujoco_visualization.png)
 
-### Real-World Runs
-![Real-world UR10 run](docs/results/real_world_run.png)
 
 ## Typical Development Workflow
 1. Edit planner/system/AURA code.
