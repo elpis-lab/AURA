@@ -1209,12 +1209,12 @@ def workspace_planning_callback_interactive(
     return on_planning_update
 
 
-# --- Demo wiring: reuse initial_time_experiment config shape ---
+# --- Demo wiring: reuse experiments.initial_time_experiment config shape ---
 
 
 def _default_config() -> dict:
     from copy import deepcopy
-    from initial_time_experiment import BASE_CONFIG, experiment_config
+    from experiments.initial_time_experiment import BASE_CONFIG, experiment_config
 
     return experiment_config(int(BASE_CONFIG["propagation_step_size"]))
 
@@ -1222,7 +1222,7 @@ def _default_config() -> dict:
 def build_planner_aura(
     config: dict, planner_name: str, planning_time: float, system_name: str, sim_mode: str
 ):
-    from initial_time_experiment import apply_state_bounds, build_planner
+    from experiments.initial_time_experiment import apply_state_bounds, build_planner
 
     system = get_system(system_name)
     apply_state_bounds(system, config["state_bounds"])
@@ -1292,7 +1292,7 @@ def main() -> None:
 
     if args.no_run:
         system = get_system(args.system)
-        from initial_time_experiment import apply_state_bounds, build_planner
+        from experiments.initial_time_experiment import apply_state_bounds, build_planner
 
         apply_state_bounds(system, config["state_bounds"])
         p = build_planner(system, config, args.planner, float(args.planning_time))
