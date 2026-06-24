@@ -206,7 +206,7 @@ def main(obj_name, model_type, use_var=1, n_data=1000, seed=42, plot=False):
     y_eval = datasets["y_pool"]
 
     # Load model
-    obj_shape = get_obj_shape(f"assets/{model_name}/textured.obj")
+    obj_shape = get_obj_shape(f"simulation/assets/{model_name}/textured.obj")
     model = load_model(model_type, obj_shape, use_var, epochs=1000)
     tr_losses, val_losses = model.fit(x_train[:n_data], y_train[:n_data], x_eval, y_eval)
     plt.plot(np.arange(len(tr_losses)), tr_losses, label="Training")
