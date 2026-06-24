@@ -1,10 +1,29 @@
-import sys
-import yaml
 import argparse
+import os
+import shlex
+import sys
+from typing import Any
+
 import numpy as np
 
 
+DEFAULT_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "initial_time_experiment_config.yaml",
+)
+
+DEFAULT_CONFIG = {
+    "planner_name": "aorrt",
+    "results_dir": "results/planning/initial_time_car_gaussian",
+    "control_durations": [1, 2, 3, 4, 5],
+    "planning_times": [3.0, 6.0, 9.0, 12.0, 15.0],
+    "num_runs": 10,
+}
+
+
 def load_config(config_file: str) -> dict:
+    import yaml
+
     with open(config_file, "r") as f:
         config = yaml.safe_load(f)
     return config
@@ -12,6 +31,8 @@ def load_config(config_file: str) -> dict:
 
 def parse_args_and_config():
     """Parse command line arguments and load configuration from YAML file."""
+    import yaml
+
     # Set up argument parser
     parser = argparse.ArgumentParser(description="Run fusion planning with YAML configuration")
     parser.add_argument(
@@ -317,6 +338,8 @@ def load_and_normalize_config(
     Returns:
         Normalized configuration dictionary with all values properly typed
     """
+    import yaml
+
     # Load configuration from YAML file
     try:
         config = load_config(config_file)
@@ -446,3 +469,175 @@ def load_and_normalize_config(
     config["visualize"] = config.get("visualize", False)
 
     return config
+
+
+def _strip_comment(line: str) -> str:
+    in_single = False
+    in_double = False
+    for idx, char in enumerate(line):
+        if char == "'" and not in_double:
+            in_single = not in_single
+        elif char == '"' and not in_single:
+            in_double = not in_double
+        elif char == "#" and not in_single and not in_double:
+            return line[:idx]
+    return line
+
+
+def _parse_scalar(value: str) -> Any:
+    text = value.strip()
+    if not text:
+        return ""
+    if (text[0], text[-1]) in {('"', '"'), ("'", "'")}:
+        return text[1:-1]
+    lower = text.lower()
+    if lower == "true":
+        return True
+    if lower == "false":
+        return False
+    try:
+        if any(char in text for char in ".eE"):
+            return float(text)
+        return int(text)
+    except ValueError:
+        return text
+
+
+def _parse_inline_list(value: str) -> list[Any]:
+    text = value.strip()
+    if not (text.startswith("[") and text.endswith("]")):
+        raise ValueError(f"expected inline list, got {value!r}")
+    body = text[1:-1].strip()
+    if not body:
+        return []
+    return [_parse_scalar(item) for item in body.split(",")]
+
+
+def _parse_yaml_subset(path: str) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    current_list_key: str | None = None
+
+    with open(path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = _strip_comment(raw_line).rstrip()
+            if not line.strip():
+                continue
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                if current_list_key is None:
+                    raise ValueError(f"list item without a key in {path}: {raw_line!r}")
+                parsed.setdefault(current_list_key, []).append(
+                    _parse_scalar(stripped[2:].strip())
+                )
+                continue
+
+            current_list_key = None
+            if ":" not in stripped:
+                raise ValueError(f"expected key: value in {path}: {raw_line!r}")
+            key, value = stripped.split(":", 1)
+            key = key.strip()
+            value = value.strip()
+            if not key:
+                raise ValueError(f"empty key in {path}: {raw_line!r}")
+            if not value:
+                parsed[key] = []
+                current_list_key = key
+            elif value.startswith("["):
+                parsed[key] = _parse_inline_list(value)
+            else:
+                parsed[key] = _parse_scalar(value)
+    return parsed
+
+
+def _as_float_list(value: Any, key: str) -> list[float]:
+    if not isinstance(value, list):
+        raise ValueError(f"{key} must be a list")
+    out = [float(item) for item in value]
+    if not out:
+        raise ValueError(f"{key} must contain at least one value")
+    return out
+
+
+def load_experiment_config(path: str | None = None) -> dict[str, Any]:
+    config = dict(DEFAULT_CONFIG)
+    config_path = path or DEFAULT_CONFIG_PATH
+    if config_path and os.path.exists(config_path):
+        config.update(_parse_yaml_subset(config_path))
+    elif path:
+        raise FileNotFoundError(config_path)
+
+    config["planner_name"] = str(config["planner_name"])
+    config["results_dir"] = str(config["results_dir"])
+    config["control_durations"] = _as_float_list(
+        config["control_durations"], "control_durations"
+    )
+    config["planning_times"] = _as_float_list(config["planning_times"], "planning_times")
+    config["num_runs"] = int(config["num_runs"])
+
+    if config["num_runs"] <= 0:
+        raise ValueError("num_runs must be positive")
+    if any(duration <= 0 for duration in config["control_durations"]):
+        raise ValueError("control_durations must be positive")
+    if any(time <= 0.0 for time in config["planning_times"]):
+        raise ValueError("planning_times must be positive")
+    return config
+
+
+def _format_number(value: float) -> str:
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{float(value):g}"
+
+
+def emit_bash_exports(config: dict[str, Any]) -> None:
+    print(f"CONFIG_PLANNER_NAME={shlex.quote(str(config['planner_name']))}")
+    print(f"CONFIG_RESULTS_DIR={shlex.quote(str(config['results_dir']))}")
+    print(f"CONFIG_NUM_RUNS={shlex.quote(str(int(config['num_runs'])))}")
+    control_values = " ".join(
+        shlex.quote(_format_number(float(value))) for value in config["control_durations"]
+    )
+    planning_values = " ".join(
+        shlex.quote(_format_number(float(value))) for value in config["planning_times"]
+    )
+    print(f"CONFIG_CONTROL_DURATIONS=({control_values})")
+    print(f"CONFIG_PLANNING_TIMES=({planning_values})")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Read AURA configuration files.")
+    parser.add_argument(
+        "--experiment-grid",
+        action="store_true",
+        help="Read the initial-time experiment sweep config.",
+    )
+    parser.add_argument(
+        "--config",
+        default=DEFAULT_CONFIG_PATH,
+        help="Experiment-grid YAML config path.",
+    )
+    parser.add_argument(
+        "--emit-bash",
+        action="store_true",
+        help="Print bash assignments for run_initial_time_experiments.sh.",
+    )
+    args = parser.parse_args()
+
+    if not args.experiment_grid:
+        parser.error("--experiment-grid is required when running configHandler.py directly")
+
+    config = load_experiment_config(args.config)
+    if args.emit_bash:
+        emit_bash_exports(config)
+    else:
+        for key in (
+            "planner_name",
+            "results_dir",
+            "control_durations",
+            "planning_times",
+            "num_runs",
+        ):
+            print(f"{key}: {config[key]}")
+
+
+if __name__ == "__main__":
+    main()
