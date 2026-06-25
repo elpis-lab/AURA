@@ -260,14 +260,10 @@ Real-world execution is not wrapped by a root bash script because it requires ha
 
 ### Hyperparameters Analysis
 <p align="center">
-  <img src="docs/results/hyperparameterStudy.png" alt="Initial-time sweep summary" width="100%">
+  <img src="docs/results/hyperparameterStudy.png" alt="Initial-time sweep summary" width="90%">
 </p>
-
-### MuJoCo / Simulation Videos
-![MuJoCo method visualization](docs/results/mujoco_visualization.png)
 
 
 ## Notes
 - MuJoCo assets live under `simulation/assets/`.
-- The real-world scripts require hardware.
 - If PyTorch prints `Can't initialize NVML`, CUDA monitoring is unavailable in the current environment. CPU execution can still work, but GPU optimizer acceleration will not be available.
