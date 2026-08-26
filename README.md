@@ -1,8 +1,8 @@
 # AURA: Asymptotically-Optimal Uncertainty-Robust Replanning Algorithm for Kinodynamic Systems
 
-![AURA overview](docs/overview.png)
+![AURA overview](https://raw.githubusercontent.com/elpis-lab/AURA/ananymous/docs/overview.png)
 
-![AURA replanning and optimization](docs/replanning_optimization.png)
+![AURA replanning and optimization](https://raw.githubusercontent.com/elpis-lab/AURA/ananymous/docs/replanning_optimization.png)
 
 AURA is a meta-planning framework for kinodynamic motion planning under motion uncertainty. It combines an asymptotically optimal sampling-based planner, concurrent replanning, and differentiable local control optimization to improve a nominal trajectory while correcting execution error.
 
@@ -260,15 +260,15 @@ Within an experiment, results are grouped by system/panel and method as required
 
 ### Trajectory Cost
 
-![Trajectory-cost comparison](docs/results/costComparison.png)
+![Trajectory-cost comparison](https://raw.githubusercontent.com/elpis-lab/AURA/ananymous/docs/results/costComparison.png)
 
 ### End-to-End Task Time
 
-![End-to-end task-time comparison](docs/results/wallTimeComparison.png)
+![End-to-end task-time comparison](https://raw.githubusercontent.com/elpis-lab/AURA/ananymous/docs/results/wallTimeComparison.png)
 
 ### Initial-Time Sensitivity
 
-![Initial-time sensitivity](docs/results/hyperparameterStudy.png)
+![Initial-time sensitivity](https://raw.githubusercontent.com/elpis-lab/AURA/ananymous/docs/results/hyperparameterStudy.png)
 
 ## Reproducibility Notes
 
