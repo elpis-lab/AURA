@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot task time against control duration and offline planning time."""
+"""Plot task time or cost against control duration and planning time."""
 
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ DEFAULT_RESULTS = (
     REPO_ROOT / "results" / "initial_time_sensitivity" / "kinematic_car_gaussian" / "raw"
 )
 DEFAULT_OUTPUT = REPO_ROOT / "results" / "initial_time_sensitivity"
+METRICS = {
+    "task_time": ("aura_time", "Task Time", "initial_time"),
+    "cost": ("cost", "Cost", "initial_cost"),
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,6 +30,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--metric",
+        choices=tuple(METRICS),
+        default="task_time",
+        help="quantity shown on the z axis (default: task_time)",
+    )
     parser.add_argument(
         "--task-time-cap",
         type=float,
@@ -46,11 +56,16 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_task_times(
-    results_dir: Path, task_time_cap: float
+def load_values(
+    results_dir: Path, metric: str, task_time_cap: float
 ) -> dict[tuple[float, float], list[float]]:
-    if not math.isfinite(task_time_cap) or task_time_cap <= 0.0:
+    if metric not in METRICS:
+        raise ValueError(f"unsupported metric: {metric}")
+    if metric == "task_time" and (
+        not math.isfinite(task_time_cap) or task_time_cap <= 0.0
+    ):
         raise ValueError("task-time cap must be finite and positive")
+    column, label, _ = METRICS[metric]
     csv_paths = sorted(results_dir.glob("*.csv"))
     if not csv_paths:
         raise FileNotFoundError(f"no result CSVs found in {results_dir}")
@@ -66,23 +81,29 @@ def load_task_times(
                 try:
                     control_duration = float(row["control_duration"])
                     planning_time = float(row["planning_time"])
-                    task_time = float(row["aura_time"])
+                    value = float(row[column])
                 except (KeyError, TypeError, ValueError) as error:
-                    raise ValueError(f"invalid task-time row in {path}") from error
-                if not all(math.isfinite(value) for value in (control_duration, planning_time, task_time)):
+                    raise ValueError(f"invalid {label.lower()} row in {path}") from error
+                if not all(
+                    math.isfinite(item)
+                    for item in (control_duration, planning_time, value)
+                ):
                     continue
-                if task_time > task_time_cap:
-                    task_time = task_time_cap
+                if metric == "task_time" and value > task_time_cap:
+                    value = task_time_cap
                     capped_rows += 1
-                values[(control_duration, planning_time)].append(task_time)
+                values[(control_duration, planning_time)].append(value)
                 loaded_rows += 1
 
     if not values:
-        raise RuntimeError(f"no finite task-time rows found in {results_dir}")
-    print(
-        f"[initial-time] Loaded {loaded_rows}/{total_rows} observations from "
-        f"{len(csv_paths)} CSV files; capped {capped_rows} at {task_time_cap:g}s."
+        raise RuntimeError(f"no finite {label.lower()} rows found in {results_dir}")
+    message = (
+        f"[initial-time] Loaded {loaded_rows}/{total_rows} {label.lower()} "
+        f"observations from {len(csv_paths)} CSV files"
     )
+    if metric == "task_time":
+        message += f"; capped {capped_rows} at {task_time_cap:g}s"
+    print(message + ".")
     return values
 
 
@@ -119,8 +140,10 @@ def make_surface(
     planning_times: list[float],
     task_times: np.ndarray,
     statistic: str,
+    metric_label: str,
 ):
     from matplotlib.colors import LinearSegmentedColormap, Normalize
+    from matplotlib.ticker import MaxNLocator, StrMethodFormatter
 
     blue = "#174A6E"
     green = "#9BC56F"
@@ -139,7 +162,9 @@ def make_surface(
 
     figure = pyplot.figure(figsize=(7.2, 4.8), facecolor="white")
     try:
-        figure.canvas.manager.set_window_title(f"{statistic.title()} Task Time")
+        figure.canvas.manager.set_window_title(
+            f"{statistic.title()} {metric_label}"
+        )
     except AttributeError:
         pass
     axes = figure.add_subplot(111, projection="3d")
@@ -215,20 +240,22 @@ def make_surface(
             linewidth=1.5,
         )
 
-    axes.set_title(f"{statistic.title()} Task Time", pad=8)
-    axes.set_xlabel("Control Duration", labelpad=9)
+    axes.set_title(f"{statistic.title()} {metric_label}", pad=8)
+    axes.set_xlabel("Maximum Control Duration", labelpad=9)
     axes.set_ylabel("Offline Planning Time", labelpad=11)
-    axes.set_zlabel("Task Time", labelpad=8)
+    axes.set_zlabel(metric_label, labelpad=8)
     axes.set_xticks(durations)
     axes.set_xticklabels([format_tick(value) for value in durations])
     axes.set_yticks(planning_times)
     axes.set_yticklabels([format_tick(value) for value in planning_times])
-    axes.set_zticks([minimum, maximum])
-    axes.set_zticklabels([])
+    axes.zaxis.set_major_locator(
+        MaxNLocator(nbins=5, integer=True, min_n_ticks=4)
+    )
+    axes.zaxis.set_major_formatter(StrMethodFormatter("{x:.0f}"))
     figure.text(
         0.015,
         0.97,
-        f"max {maximum:.2f}",
+        f"max {maximum:.0f}",
         ha="left",
         va="top",
         fontsize=11,
@@ -236,12 +263,12 @@ def make_surface(
     figure.text(
         0.015,
         0.03,
-        f"min {minimum:.2f}",
+        f"min {minimum:.0f}",
         ha="left",
         va="bottom",
         fontsize=11,
     )
-    axes.set_zlim(floor, ceiling)
+    axes.set_zlim(math.floor(floor), math.ceil(ceiling))
     axes.view_init(elev=27, azim=-128)
     axes.set_box_aspect((1.10, 1.0, 0.72))
     for axis in (axes.xaxis, axes.yaxis, axes.zaxis):
@@ -269,7 +296,10 @@ def main() -> None:
             "axes.labelsize": 12,
         }
     )
-    values = load_task_times(args.results_dir.resolve(), args.task_time_cap)
+    _, metric_label, output_prefix = METRICS[args.metric]
+    values = load_values(
+        args.results_dir.resolve(), args.metric, args.task_time_cap
+    )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     figures = []
 
@@ -277,9 +307,14 @@ def main() -> None:
     for statistic in statistics:
         durations, planning_times, task_times = aggregate(values, statistic)
         figure, minimum, maximum, min_index, max_index = make_surface(
-            pyplot, durations, planning_times, task_times, statistic
+            pyplot,
+            durations,
+            planning_times,
+            task_times,
+            statistic,
+            metric_label,
         )
-        output = args.output_dir.resolve() / f"initial_time_{statistic}.png"
+        output = args.output_dir.resolve() / f"{output_prefix}_{statistic}.png"
         figure.savefig(output, dpi=220, bbox_inches="tight", pad_inches=0.4)
         figures.append(figure)
         print(

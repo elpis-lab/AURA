@@ -1,7 +1,3 @@
-/*
- * Author: Ali Golestaneh
- */
-
 #include <set>
 #include <queue>
 #include <limits>

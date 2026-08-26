@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ompl_source="${AURA_OMPL_SOURCE:-/home/aligoles/Documents/ompl}"
+ompl_source="${AURA_OMPL_SOURCE:-${HOME}/Documents/ompl}"
 ompl_build="${AURA_OMPL_BUILD:-${ompl_source}/build-aura}"
 python_bin="${AURA_PYTHON_BIN:-python3.10}"
 jobs="${AURA_BUILD_JOBS:-$(nproc)}"

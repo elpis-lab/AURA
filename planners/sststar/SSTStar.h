@@ -1,8 +1,3 @@
-/*
- * Author: Ali Golestaneh
- */
-
-
 #ifndef OMPL_CONTROL_PLANNERS_SST_FUSION_
 #define OMPL_CONTROL_PLANNERS_SST_FUSION_
 
@@ -24,10 +19,6 @@ namespace ompl
            sampling-based motion planning algorithm for systems with dynamics. It makes use
            of random control inputs to perform a search for the best control inputs to explore
            the state space.
-           @par External documentation
-           Yanbo Li, Zakary Littlefield, Kostas E. Bekris, Sampling-based
-           Asymptotically Optimal Sampling-based Kinodynamic Planning.
-           [[PDF]](https://arxiv.org/abs/1407.2896)
         */
         class SSTStar : public base::Planner
         {

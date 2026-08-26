@@ -38,9 +38,7 @@ def sin_velocity_profile(t, d, duration):
 
 
 def progress_states(rot, side, velocities, accs, dt, obj_size=None):
-    # Model from
-    # Manipulation And Active Sensing By Pushing Using Tactile Feedback
-    # https://ieeexplore.ieee.org/document/587370
+    # Quasi-static pushing model.
     # Object properties, we assume they are unknown
     if obj_size is None:
         obj_size = 0.1  # Default value

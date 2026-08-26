@@ -1,8 +1,3 @@
-/*
- * Author: Ali Golestaneh
- */
-
-
 #ifndef OMPL_CONTROL_PLANNERS_AO_RRT_
 #define OMPL_CONTROL_PLANNERS_AO_RRT_
 
@@ -24,9 +19,6 @@ namespace ompl
            sampling-based motion planning algorithm for systems with dynamics. It makes use
            of random control inputs to perform a search for the best control inputs to explore
            the state space.
-           @par External documentation
-           Ali Golestaneh, Kostas E. Bekris, Asymptotically Optimal RRT.
-           [[PDF]](https://arxiv.org/abs/2508.12345)
         */
         class AORRT : public base::Planner
         {

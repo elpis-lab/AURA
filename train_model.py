@@ -137,8 +137,7 @@ def evaluate_results(pred, true, verbose=False):
         # Original pred_std
         # aleatoric = beta / (alpha - 1.0)
         # epistemic = aleatoric / nu
-        # Better aleatoric Proxy
-        # https://arxiv.org/pdf/2205.10060
+        # Better aleatoric proxy.
         aleatoric = beta * (1 + nu) / (alpha * nu)
         epistemic = 1 / nu
         total_var = aleatoric + epistemic
