@@ -1,7 +1,182 @@
+import math
+from dataclasses import dataclass
+from typing import List
+
 import rtde_control
 import rtde_receive
 
-from typing import List
+
+ROBOTIS_GRIPPER_ID = 1
+ROBOTIS_GRIPPER_MIN_STROKE_MM = 0.0
+ROBOTIS_GRIPPER_MAX_STROKE_MM = 106.0
+ROBOTIS_GRIPPER_CLOSED_POSITION = 740
+ROBOTIS_GRIPPER_DAEMON_URL = "http://127.0.0.1:40405/RPC2"
+ROBOTIS_STATUS_REGISTER = 16
+ROBOTIS_TORQUE_REGISTER = 17
+ROBOTIS_START_POSITION_REGISTER = 18
+ROBOTIS_FINAL_POSITION_REGISTER = 19
+ROBOTIS_POSITION_TOLERANCE = 15
+
+
+@dataclass(frozen=True)
+class RobotisGripperResult:
+    requested_stroke_mm: float
+    target_position: int
+    start_position: int
+    final_position: int
+    torque_enabled: bool
+    reached_target: bool
+    contact_grasp: bool = False
+    force_percent: float = 0.0
+
+
+def robotis_action_to_stroke(action: str) -> float:
+    """Return the full-stroke endpoint for an open or close command."""
+
+    command = str(action).strip().lower()
+    if command == "open":
+        return ROBOTIS_GRIPPER_MAX_STROKE_MM
+    if command == "close":
+        return ROBOTIS_GRIPPER_MIN_STROKE_MM
+    raise ValueError("gripper action must be 'open' or 'close'")
+
+
+def robotis_stroke_to_position(stroke_mm: float) -> int:
+    """Apply the RH-P12-RN URCap's 0--106 mm stroke conversion."""
+
+    stroke = float(stroke_mm)
+    if not math.isfinite(stroke) or not 0.0 <= stroke <= ROBOTIS_GRIPPER_MAX_STROKE_MM:
+        raise ValueError("RH-P12-RN stroke must be within [0, 106] mm")
+    position = int(
+        (math.acos((stroke - 10.0) / 111.5) - math.pi / 6.0)
+        * 2048.0
+        / math.pi
+    )
+    return min(ROBOTIS_GRIPPER_CLOSED_POSITION, max(0, position))
+
+
+def build_robotis_gripper_script(
+    stroke_mm: float,
+    *,
+    velocity_percent: float,
+    force_percent: float,
+    wait: bool,
+) -> str:
+    """Build the same XML-RPC calls emitted by ROBOTIS URCap 1.1.0."""
+
+    velocity = float(velocity_percent)
+    force = float(force_percent)
+    if not math.isfinite(velocity) or not 1.0 <= velocity <= 100.0:
+        raise ValueError("RH-P12-RN velocity must be within [1, 100] percent")
+    if not math.isfinite(force) or not 0.0 <= force <= 100.0:
+        raise ValueError("RH-P12-RN force must be within [0, 100] percent")
+
+    current_value = int(force * 6.61)
+    velocity_value = int(velocity * 10.0)
+    position_value = robotis_stroke_to_position(stroke_mm)
+    position_lower = max(0, position_value - ROBOTIS_POSITION_TOLERANCE)
+    position_upper = min(1150, position_value + ROBOTIS_POSITION_TOLERANCE)
+    contact_position_min = (
+        robotis_stroke_to_position(ROBOTIS_GRIPPER_MAX_STROKE_MM)
+        + ROBOTIS_POSITION_TOLERANCE
+    )
+    allow_contact_grasp = position_value == ROBOTIS_GRIPPER_CLOSED_POSITION
+    lines = [
+        f"write_output_integer_register({ROBOTIS_STATUS_REGISTER}, 0)",
+        f"write_output_integer_register({ROBOTIS_TORQUE_REGISTER}, 0)",
+        f"write_output_integer_register({ROBOTIS_START_POSITION_REGISTER}, -1)",
+        f"write_output_integer_register({ROBOTIS_FINAL_POSITION_REGISTER}, -1)",
+        f'gripper_daemon = rpc_factory("xmlrpc", "{ROBOTIS_GRIPPER_DAEMON_URL}")',
+        f"is_reachable = gripper_daemon.is_reachable({ROBOTIS_GRIPPER_ID})",
+        "if (is_reachable == False):",
+        f"  write_output_integer_register({ROBOTIS_STATUS_REGISTER}, -1)",
+        "else:",
+        f"  torque_enabled = gripper_daemon.get_torque({ROBOTIS_GRIPPER_ID})",
+        "  if (torque_enabled == False):",
+        f"    gripper_daemon.set_torque({ROBOTIS_GRIPPER_ID}, 1)",
+        "    sleep(0.5)",
+        f"    torque_enabled = gripper_daemon.get_torque({ROBOTIS_GRIPPER_ID})",
+        "  end",
+        "  if (torque_enabled == False):",
+        f"    write_output_integer_register({ROBOTIS_STATUS_REGISTER}, -2)",
+        "  else:",
+        f"    write_output_integer_register({ROBOTIS_TORQUE_REGISTER}, 1)",
+        f"    start_position = gripper_daemon.get_position({ROBOTIS_GRIPPER_ID})",
+        (
+            f"    write_output_integer_register({ROBOTIS_START_POSITION_REGISTER}, "
+            "start_position)"
+        ),
+        (
+            f"    move_accepted = gripper_daemon.set_move({ROBOTIS_GRIPPER_ID}, "
+            f"{current_value}, {velocity_value}, {position_value})"
+        ),
+        "    if (move_accepted == False):",
+        f"      write_output_integer_register({ROBOTIS_STATUS_REGISTER}, -3)",
+        "    else:",
+    ]
+    if wait:
+        lines.extend(
+            [
+                "      sleep(0.5)",
+                f"      final_position = gripper_daemon.get_position({ROBOTIS_GRIPPER_ID})",
+                (
+                    f"      at_target = ((final_position >= {position_lower}) and "
+                    f"(final_position <= {position_upper}))"
+                ),
+                f"      moving = gripper_daemon.is_moving({ROBOTIS_GRIPPER_ID})",
+                "      wait_checks = 0",
+                (
+                    "      while ((at_target == False) and (moving == True) "
+                    "and (wait_checks < 80)):"
+                ),
+                "        sleep(0.25)",
+                f"        final_position = gripper_daemon.get_position({ROBOTIS_GRIPPER_ID})",
+                (
+                    f"        at_target = ((final_position >= {position_lower}) and "
+                    f"(final_position <= {position_upper}))"
+                ),
+                f"        moving = gripper_daemon.is_moving({ROBOTIS_GRIPPER_ID})",
+                "        wait_checks = wait_checks + 1",
+                "      end",
+                (
+                    f"      write_output_integer_register({ROBOTIS_FINAL_POSITION_REGISTER}, "
+                    "final_position)"
+                ),
+                "      if (at_target == True):",
+                f"        write_output_integer_register({ROBOTIS_STATUS_REGISTER}, 1)",
+            ]
+        )
+        if allow_contact_grasp:
+            lines.extend(
+                [
+                    (
+                        "      elif ((moving == False) and "
+                        f"(final_position > {contact_position_min})):"
+                    ),
+                    f"        write_output_integer_register({ROBOTIS_STATUS_REGISTER}, 4)",
+                ]
+            )
+        lines.extend(
+            [
+                "      else:",
+                f"        write_output_integer_register({ROBOTIS_STATUS_REGISTER}, 2)",
+                "      end",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "      sleep(0.1)",
+                f"      final_position = gripper_daemon.get_position({ROBOTIS_GRIPPER_ID})",
+                (
+                    f"      write_output_integer_register({ROBOTIS_FINAL_POSITION_REGISTER}, "
+                    "final_position)"
+                ),
+                f"      write_output_integer_register({ROBOTIS_STATUS_REGISTER}, 3)",
+            ]
+        )
+    lines.extend(["    end", "  end", "end"])
+    return "\n".join(lines) + "\n"
 
 
 class RTDE:
@@ -42,6 +217,114 @@ class RTDE:
         The pose is defined as [x, y, z, rx, ry, rz] position + rotation vector
         """
         self.rtde_c.setTcp(tcp)
+
+    def move_robotis_gripper(
+        self,
+        stroke_mm: float,
+        *,
+        velocity_percent: float = 30.0,
+        force_percent: float = 20.0,
+        wait: bool = True,
+    ) -> RobotisGripperResult:
+        """Move an RH-P12-RN through its robot-local ROBOTIS URCap daemon.
+
+        ``sendCustomScriptFunction`` temporarily stops the regular ur_rtde
+        control script, executes this self-contained command, and re-uploads
+        the control script before returning.
+        """
+
+        script = build_robotis_gripper_script(
+            stroke_mm,
+            velocity_percent=velocity_percent,
+            force_percent=force_percent,
+            wait=wait,
+        )
+        completed = self.rtde_c.sendCustomScriptFunction(
+            "aura_robotis_gripper_move", script
+        )
+        if not completed:
+            raise RuntimeError("RH-P12-RN URCap command did not complete")
+
+        status = self.rtde_r.getOutputIntRegister(ROBOTIS_STATUS_REGISTER)
+        start_position = self.rtde_r.getOutputIntRegister(
+            ROBOTIS_START_POSITION_REGISTER
+        )
+        final_position = self.rtde_r.getOutputIntRegister(
+            ROBOTIS_FINAL_POSITION_REGISTER
+        )
+        torque_enabled = bool(
+            self.rtde_r.getOutputIntRegister(ROBOTIS_TORQUE_REGISTER)
+        )
+        target_position = robotis_stroke_to_position(stroke_mm)
+        allows_contact_grasp = target_position == ROBOTIS_GRIPPER_CLOSED_POSITION
+        errors = {
+            -1: "RH-P12-RN is not reachable through the URCap daemon",
+            -2: "RH-P12-RN torque did not enable",
+            -3: "RH-P12-RN move request was rejected",
+            0: "RH-P12-RN command ended without a status",
+            2: (
+                "RH-P12-RN neither reached the closed endpoint nor established "
+                "a stationary contact grasp"
+                if allows_contact_grasp
+                else "RH-P12-RN did not reach the requested open position"
+            ),
+        }
+        if status in errors:
+            raise RuntimeError(errors[status])
+        if status not in (1, 3, 4):
+            raise RuntimeError(f"Unknown RH-P12-RN status code: {status}")
+
+        reached_target = (
+            abs(final_position - target_position) <= ROBOTIS_POSITION_TOLERANCE
+        )
+        contact_grasp = (
+            status == 4
+            and allows_contact_grasp
+            and torque_enabled
+            and final_position
+            > robotis_stroke_to_position(ROBOTIS_GRIPPER_MAX_STROKE_MM)
+            + ROBOTIS_POSITION_TOLERANCE
+        )
+        if status == 4 and not contact_grasp:
+            raise RuntimeError("RH-P12-RN reported an invalid contact-grasp status")
+        if wait and not (reached_target or contact_grasp):
+            raise RuntimeError(
+                "RH-P12-RN stopped at raw position "
+                f"{final_position}, expected {target_position}"
+            )
+        return RobotisGripperResult(
+            requested_stroke_mm=float(stroke_mm),
+            target_position=target_position,
+            start_position=start_position,
+            final_position=final_position,
+            torque_enabled=torque_enabled,
+            reached_target=reached_target,
+            contact_grasp=contact_grasp,
+            force_percent=float(force_percent),
+        )
+
+    def control_robotis_gripper(
+        self,
+        action: str,
+        *,
+        velocity_percent: float = 30.0,
+        force_percent: float = 20.0,
+        wait: bool = True,
+    ) -> RobotisGripperResult:
+        """Open fully, or close until the endpoint or a loaded contact grasp."""
+
+        return self.move_robotis_gripper(
+            robotis_action_to_stroke(action),
+            velocity_percent=velocity_percent,
+            force_percent=force_percent,
+            wait=wait,
+        )
+
+    def disconnect(self) -> None:
+        """Close both RTDE connections."""
+
+        self.rtde_c.disconnect()
+        self.rtde_r.disconnect()
 
     # Joint control
     def move_joint(

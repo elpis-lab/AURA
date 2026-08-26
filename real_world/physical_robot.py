@@ -1,24 +1,98 @@
 import time
 import numpy as np
 from scipy.spatial.transform import Rotation as R
-import matplotlib.pyplot as plt
 
 from real_world.rtde import RTDE
-from real_world.gripper import Gripper
 from real_world.camera import Camera
 
 
 class PhysicalUR10:
-    def __init__(self):
-        """Initialize the physical UR10 robot class"""
-        self.rtde = RTDE("192.168.0.100")
-        self.gripper = Gripper("192.168.0.101", "8005")
-        self.top_cam = Camera("192.168.0.101", "5001")
-        self.hand_cam = Camera("192.168.0.101", "5000")
+    def __init__(
+        self,
+        robot_ip: str = "192.168.0.100",
+        camera_host: str = "192.168.0.101",
+        *,
+        rtde: RTDE | None = None,
+        hand_camera: Camera | None = None,
+        motion_debug: bool = False,
+    ):
+        """Connect to the UR controller and the in-hand camera service.
+
+        The RH-P12-RN has no separate network connection here. It is wired to
+        the UR wrist and controlled by the installed ROBOTIS URCap through the
+        existing robot RTDE connection.
+        """
+
+        self.rtde = rtde if rtde is not None else RTDE(robot_ip)
+        self.hand_cam = (
+            hand_camera if hand_camera is not None else Camera(camera_host, "5000")
+        )
+        self.motion_debug = bool(motion_debug)
+
+    @staticmethod
+    def format_motion_values(values) -> str:
+        return np.array2string(
+            np.asarray(values, dtype=float), precision=5, suppress_small=True
+        )
+
+    def print_motion_debug(
+        self,
+        label: str,
+        motion_type: str,
+        target,
+        *,
+        speed,
+        acceleration,
+        first_target=None,
+        waypoint_count: int | None = None,
+        dt: float | None = None,
+    ) -> None:
+        """Print the measured robot state and next commanded motion."""
+
+        if not self.motion_debug:
+            return
+
+        print(f"\n[ROBOT MOVE] {label}")
+        print(f"  type: {motion_type}")
+        print(
+            "  current joints [rad]:",
+            self.format_motion_values(self.get_q_values()),
+        )
+        print(
+            "  current TCP [m, rotvec]:",
+            self.format_motion_values(self.get_ee_pose()),
+        )
+        if first_target is not None:
+            print("  first target:", self.format_motion_values(first_target))
+            print("  final target:", self.format_motion_values(target))
+            print(f"  waypoints: {waypoint_count}, dt: {float(dt):.6f}s")
+        else:
+            print("  target:", self.format_motion_values(target))
+        print(f"  speed: {speed}, acceleration: {acceleration}", flush=True)
 
     # Joint control
-    def execute_trajectory(self, waypoints, d_t: float = 0.008, **kwargs):
+    def execute_trajectory(
+        self,
+        waypoints,
+        d_t: float = 0.008,
+        *,
+        label: str = "joint trajectory",
+        **kwargs,
+    ):
         """Execute a trajectory"""
+        waypoints = list(waypoints)
+        if not waypoints:
+            raise ValueError("joint trajectory requires at least one waypoint")
+        self.print_motion_debug(
+            label,
+            "servoJ trajectory",
+            waypoints[-1],
+            speed=kwargs.get("speed", "servoJ"),
+            acceleration=kwargs.get("acceleration", "servoJ"),
+            first_target=waypoints[0],
+            waypoint_count=len(waypoints),
+            dt=d_t,
+        )
         # speed_list = []
 
         # Execute each waypoint
@@ -40,12 +114,27 @@ class PhysicalUR10:
         waypoints: list[list[float]],
         d_t: float = 0.008,
         to_rotvec: bool = False,
+        *,
+        label: str = "TCP trajectory",
         **kwargs,
     ):
         """Execute a trajectory"""
+        waypoints = list(waypoints)
         # Convert waypoints to rotation vector pose
         if to_rotvec:
             waypoints = [self._quat_to_rotvec_pose(p) for p in waypoints]
+        if not waypoints:
+            raise ValueError("TCP trajectory requires at least one waypoint")
+        self.print_motion_debug(
+            label,
+            "servoL trajectory",
+            waypoints[-1],
+            speed=kwargs.get("speed", "servoL"),
+            acceleration=kwargs.get("acceleration", "servoL"),
+            first_target=waypoints[0],
+            waypoint_count=len(waypoints),
+            dt=d_t,
+        )
         # speed_list = []
 
         # Execute each waypoint
@@ -62,16 +151,41 @@ class PhysicalUR10:
         # plt.plot(speed_list)
         # plt.show()
 
-    def move_joint(self, joint_angles: list[float], **kwargs):
+    def move_joint(
+        self,
+        joint_angles: list[float],
+        *,
+        label: str = "joint move",
+        **kwargs,
+    ):
         """Move the robot to a joint configuration"""
+        self.print_motion_debug(
+            label,
+            "moveJ",
+            joint_angles,
+            speed=kwargs.get("speed", 1.05),
+            acceleration=kwargs.get("acceleration", 1.4),
+        )
         self.rtde.move_joint(joint_angles, **kwargs)
 
     def move_tool(
-        self, tool_pose: list[float], to_rotvec: bool = False, **kwargs
+        self,
+        tool_pose: list[float],
+        to_rotvec: bool = False,
+        *,
+        label: str = "TCP move",
+        **kwargs,
     ):
         """Move the robot to a tool pose"""
         if to_rotvec:
             tool_pose = self._quat_to_rotvec_pose(tool_pose)
+        self.print_motion_debug(
+            label,
+            "moveL",
+            tool_pose,
+            speed=kwargs.get("speed", 0.25),
+            acceleration=kwargs.get("acceleration", 1.2),
+        )
         self.rtde.move_tool(tool_pose, **kwargs)
 
     def _quat_to_rotvec_pose(self, quat_pose: list[float]):
@@ -82,22 +196,26 @@ class PhysicalUR10:
         return list(quat_pose[:3]) + list(rotvec)
 
     # Gripper
-    def control_gripper(self, action: str):
-        """Control the gripper"""
-        if action == "open":
-            self.gripper.open_gripper()
-        elif action == "close":
-            self.gripper.close_gripper()
-        else:
-            raise ValueError(f"Invalid action: {action}")
+    def control_gripper(
+        self,
+        action: str,
+        *,
+        velocity_percent: float = 30.0,
+        force_percent: float = 20.0,
+        wait: bool = True,
+    ):
+        """Open or close the wrist-connected ROBOTIS RH-P12-RN."""
+
+        return self.rtde.control_robotis_gripper(
+            action,
+            velocity_percent=velocity_percent,
+            force_percent=force_percent,
+            wait=wait,
+        )
 
     # Camera
-    def get_object_pose_top(self):
-        """Get the pose of the object from the top camera"""
-        return self.top_cam.get_object_pose()
-
     def get_object_pose_hand(self):
-        """Get the pose of the object from the hand camera"""
+        """Get the pose of the object from the in-hand camera."""
         return self.hand_cam.get_object_pose()
 
     # Getters
