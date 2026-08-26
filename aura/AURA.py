@@ -12,6 +12,7 @@ import torch
 
 from utils import auraHandler
 from propagators import (
+    System,
     double_integrator,
     dubins_airplane,
     kinematic_car,
@@ -19,7 +20,6 @@ from propagators import (
 )
 from simulation.pushing_model import get_pushing_model
 from aura.optimization import optimize_controls, warmup_optimizer_device
-from systems import System
 from methods.plan import OMPLPlanner
 from utils.childrenHandler import getChildEdges
 from utils.control_duration import (
@@ -37,7 +37,7 @@ from utils.utils import (
 class AURA:
     """
     AURA execution loop built on top of:
-      - systems.System subclasses
+      - propagators.System subclasses
       - methods.plan.OMPLPlanner
       - simulation.simulator.Simulator backends
     """

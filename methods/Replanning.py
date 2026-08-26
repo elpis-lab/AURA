@@ -12,7 +12,7 @@ from ompl import base as ob
 from methods.plan import OMPLPlanner
 from simulation.pushing_model import get_pushing_model
 from simulation.simulator import create_simulator
-from systems import get_system
+from propagators import get_system
 from train_model import load_opt_model_2
 from utils.control_duration import duration_seconds_to_steps
 from utils.utils import arrayDistance, state2list

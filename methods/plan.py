@@ -10,7 +10,7 @@ from ompl import base as ob
 from ompl import control as oc
 
 from methods.RandUpRRT import RandUpRRT, RandUpRRTConfig
-from systems import System
+from propagators import System
 from utils.control_duration import duration_seconds_to_steps, validate_duration_range
 from utils.utils import arrayDistance, isStateValid, log, normalize_obstacle_config
 

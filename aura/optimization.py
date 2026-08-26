@@ -10,6 +10,7 @@ import numpy as np
 import torch
 
 from propagators import (
+    System,
     double_integrator,
     dubins_airplane,
     kinematic_car,
@@ -18,7 +19,6 @@ from propagators import (
 from propagators.propagator import wrap_angle_torch
 from simulation.pushing_model import get_pushing_model
 from simulation.pushing_model import CRACKER_BOX_FLIPPED_SHAPE
-from systems import System
 from utils.control_duration import (
     ControlEdge,
     duration_seconds_to_steps,
