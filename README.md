@@ -1,8 +1,12 @@
 # AURA: Asymptotically-Optimal Uncertainty-Robust Replanning Algorithm for Kinodynamic Systems
 
-![AURA overview](https://raw.githubusercontent.com/elpis-lab/AURA/ananymous/docs/overview.png)
+<p align="center">
+  <img src="docs/overview.png" alt="AURA overview" width="100%">
+</p>
 
-![AURA replanning and optimization](https://raw.githubusercontent.com/elpis-lab/AURA/ananymous/docs/replanning_optimization.png)
+<p align="center">
+  <img src="docs/replanning_optimization.png" alt="AURA replanning and optimization" width="90%">
+</p>
 
 AURA is a meta-planning framework for kinodynamic motion planning under motion uncertainty. It combines an asymptotically optimal sampling-based planner, concurrent replanning, and differentiable local control optimization to improve a nominal trajectory while correcting execution error.
 
@@ -260,15 +264,21 @@ Within an experiment, results are grouped by system/panel and method as required
 
 ### Trajectory Cost
 
-![Trajectory-cost comparison](https://raw.githubusercontent.com/elpis-lab/AURA/ananymous/docs/results/costComparison.png)
+<p align="center">
+  <img src="docs/results/costComparison.png" alt="Trajectory-cost comparison" width="100%">
+</p>
 
 ### End-to-End Task Time
 
-![End-to-end task-time comparison](https://raw.githubusercontent.com/elpis-lab/AURA/ananymous/docs/results/wallTimeComparison.png)
+<p align="center">
+  <img src="docs/results/wallTimeComparison.png" alt="End-to-end task-time comparison" width="100%">
+</p>
 
 ### Initial-Time Sensitivity
 
-![Initial-time sensitivity](https://raw.githubusercontent.com/elpis-lab/AURA/ananymous/docs/results/hyperparameterStudy.png)
+<p align="center">
+  <img src="docs/results/hyperparameterStudy.png" alt="Initial-time sensitivity" width="90%">
+</p>
 
 ## Reproducibility Notes
 
