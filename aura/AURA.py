@@ -20,12 +20,8 @@ from propagators import (
 )
 from simulation.pushing_model import get_pushing_model
 from aura.optimization import optimize_controls, warmup_optimizer_device
-from methods.plan import OMPLPlanner
+from methods.plan import ControlEdge, ControlSelection, OMPLPlanner
 from utils.childrenHandler import getChildEdges
-from utils.control_duration import (
-    ControlEdge,
-    ControlSelection,
-)
 from simulation.simulator import Simulator
 from utils.utils import (
     arrayDistance,

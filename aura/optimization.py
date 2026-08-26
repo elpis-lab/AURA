@@ -19,7 +19,7 @@ from propagators import (
 from propagators.propagator import wrap_angle_torch
 from simulation.pushing_model import get_pushing_model
 from simulation.pushing_model import CRACKER_BOX_FLIPPED_SHAPE
-from utils.control_duration import (
+from methods.plan import (
     ControlEdge,
     duration_seconds_to_steps,
 )

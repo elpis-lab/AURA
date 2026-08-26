@@ -1,0 +1,23 @@
+experiment_name: initial_time_sensitivity
+method: aura
+planner: aorrt
+control_durations: [1, 2, 3, 4, 5]
+planning_times: [3, 6, 9, 12, 15]
+num_trials: 5
+base_seed: 20260825
+results_dir: results/initial_time_sensitivity/kinematic_car_gaussian/raw
+motion_validation_step_size: 1.0
+minimum_control_duration_steps: 1
+pruning_radius: 0.05
+goal_bias: 0.05
+replanning_time_budget: 1.0
+recovery_replanning_time: 1.0
+solution_continuity_max_distance: 0.2
+optimizer_position_std: 0.005
+optimizer_rotation_std: 0.05
+optimizer_num_states: 2000
+optimizer_num_steps: 1000
+optimizer_learning_rate: 0.01
+optimizer_max_children: 0
+task_time_limit_seconds: 120.0
+failure_time: 120.0

@@ -4,15 +4,195 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from ompl import base as ob
 from ompl import control as oc
 
 from methods.RandUpRRT import RandUpRRT, RandUpRRTConfig
-from propagators import System
-from utils.control_duration import duration_seconds_to_steps, validate_duration_range
 from utils.utils import arrayDistance, isStateValid, log, normalize_obstacle_config
+
+if TYPE_CHECKING:
+    from propagators import System
+
+
+DURATION_TOLERANCE = 1e-8
+
+
+def validate_duration_range(min_steps: int, max_steps: int) -> tuple[int, int]:
+    """Validate and normalize an OMPL control-duration range."""
+
+    minimum = int(min_steps)
+    maximum = int(max_steps)
+    if minimum < 1:
+        raise ValueError(f"min_control_duration must be at least 1, got {minimum}")
+    if maximum < minimum:
+        raise ValueError(
+            "max_control_duration must be greater than or equal to "
+            f"min_control_duration, got [{minimum}, {maximum}]"
+        )
+    return minimum, maximum
+
+
+def duration_steps_to_seconds(steps: int, propagation_step_size: float) -> float:
+    """Convert an OMPL propagation-step count to physical seconds."""
+
+    step_count = int(steps)
+    step_size = float(propagation_step_size)
+    if step_count < 1:
+        raise ValueError(f"duration steps must be at least 1, got {step_count}")
+    if not np.isfinite(step_size) or step_size <= 0.0:
+        raise ValueError(
+            "propagation_step_size must be finite and positive, "
+            f"got {step_size}"
+        )
+    return float(step_count * step_size)
+
+
+def duration_seconds_to_steps(
+    duration_seconds: float,
+    propagation_step_size: float,
+    *,
+    min_steps: int | None = None,
+    max_steps: int | None = None,
+    atol: float = DURATION_TOLERANCE,
+) -> int:
+    """Convert an OMPL edge duration to an exact propagation-step count."""
+
+    duration = float(duration_seconds)
+    step_size = float(propagation_step_size)
+    if not np.isfinite(duration) or duration <= 0.0:
+        raise ValueError(
+            f"duration_seconds must be finite and positive, got {duration}"
+        )
+    if not np.isfinite(step_size) or step_size <= 0.0:
+        raise ValueError(
+            "propagation_step_size must be finite and positive, "
+            f"got {step_size}"
+        )
+
+    ratio = duration / step_size
+    rounded = int(round(ratio))
+    allowed_error = max(float(atol), abs(ratio) * float(atol))
+    if rounded < 1 or abs(ratio - rounded) > allowed_error:
+        raise ValueError(
+            f"duration {duration:.17g}s is not an integer multiple of "
+            f"propagation_step_size {step_size:.17g}s (ratio={ratio:.17g})"
+        )
+    if min_steps is not None and rounded < int(min_steps):
+        raise ValueError(
+            f"duration has {rounded} steps, below configured minimum "
+            f"{int(min_steps)}"
+        )
+    if max_steps is not None and rounded > int(max_steps):
+        raise ValueError(
+            f"duration has {rounded} steps, above configured maximum "
+            f"{int(max_steps)}"
+        )
+    return rounded
+
+
+@dataclass(frozen=True)
+class ControlEdge:
+    """A planner edge whose control and duration remain inseparable."""
+
+    source_state: np.ndarray
+    target_state: np.ndarray
+    control: np.ndarray
+    duration_steps: int
+    duration_seconds: float
+    source_vertex: int | None = None
+    target_vertex: int | None = None
+    edge_id: str = ""
+
+    def __post_init__(self) -> None:
+        source = np.asarray(self.source_state, dtype=float).reshape(-1).copy()
+        target = np.asarray(self.target_state, dtype=float).reshape(-1).copy()
+        control = np.asarray(self.control, dtype=float).reshape(-1).copy()
+        steps = int(self.duration_steps)
+        seconds = float(self.duration_seconds)
+        if not source.size or not np.all(np.isfinite(source)):
+            raise ValueError("ControlEdge source_state must be finite and non-empty")
+        if not target.size or not np.all(np.isfinite(target)):
+            raise ValueError("ControlEdge target_state must be finite and non-empty")
+        if not control.size or not np.all(np.isfinite(control)):
+            raise ValueError("ControlEdge control must be finite and non-empty")
+        if steps < 1:
+            raise ValueError(
+                f"ControlEdge duration_steps must be at least 1, got {steps}"
+            )
+        if not np.isfinite(seconds) or seconds <= 0.0:
+            raise ValueError(
+                "ControlEdge duration_seconds must be finite and positive, "
+                f"got {seconds}"
+            )
+
+        source.setflags(write=False)
+        target.setflags(write=False)
+        control.setflags(write=False)
+        object.__setattr__(self, "source_state", source)
+        object.__setattr__(self, "target_state", target)
+        object.__setattr__(self, "control", control)
+        object.__setattr__(self, "duration_steps", steps)
+        object.__setattr__(self, "duration_seconds", seconds)
+        if not self.edge_id:
+            source_id = (
+                "?" if self.source_vertex is None else str(int(self.source_vertex))
+            )
+            target_id = (
+                "?" if self.target_vertex is None else str(int(self.target_vertex))
+            )
+            object.__setattr__(self, "edge_id", f"{source_id}->{target_id}")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "source_state": self.source_state.tolist(),
+            "target_state": self.target_state.tolist(),
+            "control": self.control.tolist(),
+            "duration_steps": self.duration_steps,
+            "duration_seconds": self.duration_seconds,
+            "source_vertex": self.source_vertex,
+            "target_vertex": self.target_vertex,
+            "edge_id": self.edge_id,
+        }
+
+
+@dataclass(frozen=True)
+class ControlSelection:
+    """A control-duration pair selected for the next execution cycle."""
+
+    control: np.ndarray
+    duration_steps: int
+    duration_seconds: float
+    edge_id: str
+    source: str
+    target_state: np.ndarray
+
+    def __post_init__(self) -> None:
+        control = np.asarray(self.control, dtype=float).reshape(-1).copy()
+        target = np.asarray(self.target_state, dtype=float).reshape(-1).copy()
+        if not control.size or not np.all(np.isfinite(control)):
+            raise ValueError("ControlSelection control must be finite and non-empty")
+        if not target.size or not np.all(np.isfinite(target)):
+            raise ValueError(
+                "ControlSelection target_state must be finite and non-empty"
+            )
+        if int(self.duration_steps) < 1:
+            raise ValueError("ControlSelection duration_steps must be at least 1")
+        if (
+            not np.isfinite(float(self.duration_seconds))
+            or float(self.duration_seconds) <= 0.0
+        ):
+            raise ValueError(
+                "ControlSelection duration_seconds must be finite and positive"
+            )
+        control.setflags(write=False)
+        target.setflags(write=False)
+        object.__setattr__(self, "control", control)
+        object.__setattr__(self, "target_state", target)
+        object.__setattr__(self, "duration_steps", int(self.duration_steps))
+        object.__setattr__(self, "duration_seconds", float(self.duration_seconds))
 
 
 class InterpolatingMotionValidator(ob.MotionValidator):

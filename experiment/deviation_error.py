@@ -33,6 +33,7 @@ os.environ.setdefault("MUJOCO_GL", "egl")
 
 import numpy as np
 import torch
+import yaml
 
 from methods.MPPI import default_parameters, parameters_from_config
 from aura.optimization import optimizer_device_info
@@ -57,7 +58,7 @@ from utils.deviation import (
     generate_valid_reference,
 )
 from simulation.simulator import create_simulator
-from systems import get_system
+from propagators import get_system
 from utils.experiment_io import (
     read_csv,
     read_json_lines,
@@ -73,6 +74,9 @@ STEP_FILE = "tracking_step_metrics.csv"
 TRIAL_FILE = "trial_tracking_metrics.csv"
 REFERENCE_FILE = "reference_trajectories.jsonl"
 BOOTSTRAP_SEED = 91_337
+DEFAULT_CONFIG = (
+    REPO_ROOT / "configs" / "experiments" / "deviation_error.yaml"
+)
 
 
 def condition_output_dir(root: Path, system: str, environment: str) -> Path:
@@ -82,22 +86,20 @@ def condition_output_dir(root: Path, system: str, environment: str) -> Path:
 def build_simulator_config(
     system_name: str, environment: str, duration: float | None = None
 ) -> dict[str, Any]:
+    system_path = REPO_ROOT / "configs" / "systems" / f"{system_name}.yaml"
+    system_config = yaml.safe_load(system_path.read_text(encoding="utf-8")) or {}
+    environment_config = system_config.get("environments", {}).get(environment, {})
     if duration is None and system_name == "pushing_object" and environment == "mujoco":
         duration = 2.0
-    config: dict[str, Any] = {}
+    config: dict[str, Any] = {
+        key: value
+        for key, value in environment_config.items()
+        if key.startswith("sampling_") or key.startswith("mujoco_") or key == "headless"
+    }
     if duration is not None:
         config["propagation_step_size"] = float(duration)
     if system_name == "dubins_airplane":
         config["start_state"] = [0.1, 0.1, 0.15, 0.0, 0.0, 0.15]
-    if environment == "gaussian":
-        config.update(
-            sampling_position_std=0.003,
-            sampling_rotation_std=0.05,
-        )
-        if system_name == "double_integrator":
-            config.update(sampling_rotation_std=0.0, sampling_velocity_std=0.001)
-        elif system_name == "dubins_airplane":
-            config["sampling_velocity_std"] = 0.003
     return config
 
 
@@ -253,7 +255,14 @@ def _condition_config(
 ) -> tuple[Any, dict[str, Any]]:
     if environment == "mujoco" and system_name == "double_integrator":
         raise ValueError("double_integrator has no MuJoCo execution adapter")
+    system_path = REPO_ROOT / "configs" / "systems" / f"{system_name}.yaml"
+    system_config = yaml.safe_load(system_path.read_text(encoding="utf-8")) or {}
+    environment_config = system_config["environments"][environment]
     system = get_system(system_name)
+    system.set_state_bounds(
+        environment_config.get("state_bounds", system_config["state_bounds"])
+    )
+    system.set_control_bounds(system_config["control_bounds"])
     simulator_config = build_simulator_config(system_name, environment)
     duration = float(simulator_config.get("propagation_step_size", 0.1))
     if system_name == "pushing_object" and environment == "mujoco":
@@ -346,8 +355,8 @@ def _condition_config(
     if pushing:
         config.update(
             {
-                "model_name": "cracker_box_flipped",
-                "model_path": "learned_models/cracker_box_flipped_mlp_0.0_1000_0.pth",
+                "model_name": system_config["model_name"],
+                "model_path": system_config["model_path"],
             }
         )
     if pushing and environment == "mujoco":
@@ -463,23 +472,32 @@ def _print_summary(summary: list[dict[str, Any]]) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    preliminary = argparse.ArgumentParser(add_help=False)
+    preliminary.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    known, _ = preliminary.parse_known_args(argv)
+    defaults = yaml.safe_load(known.config.read_text(encoding="utf-8")) or {}
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, default=known.config)
     parser.add_argument("--system", default="double_integrator")
     parser.add_argument(
         "--environment", choices=("gaussian", "mujoco", "all"), default="gaussian"
     )
-    parser.add_argument("--num-trials", type=int, default=100)
-    parser.add_argument("--num-controls", type=int, default=10)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--num-trials", type=int, default=int(defaults["num_trials"]))
+    parser.add_argument("--num-controls", type=int, default=int(defaults["num_controls"]))
+    parser.add_argument("--seed", type=int, default=int(defaults["base_seed"]))
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("results/error_experiment"),
+        default=REPO_ROOT / str(defaults["results_dir"]),
     )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--device", default="auto")
-    parser.add_argument("--bootstrap-resamples", type=int, default=10_000)
+    parser.add_argument("--device", default=str(defaults["device"]))
+    parser.add_argument(
+        "--bootstrap-resamples",
+        type=int,
+        default=int(defaults["bootstrap_resamples"]),
+    )
     parser.add_argument(
         "--overrides-json",
         type=Path,
@@ -500,7 +518,17 @@ def main(argv: list[str] | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     systems = _resolve_systems(args.system)
     environments = _resolve_environments(args.environment)
-    condition_overrides = _load_condition_overrides(args.overrides_json)
+    experiment_config = yaml.safe_load(
+        args.config.resolve().read_text(encoding="utf-8")
+    ) or {}
+    condition_overrides = {
+        str(key): dict(value)
+        for key, value in experiment_config.get(
+            "condition_hyperparameters", {}
+        ).items()
+    }
+    for key, value in _load_condition_overrides(args.overrides_json).items():
+        _deep_update(condition_overrides.setdefault(key, {}), value)
     resolved_device, device_info = _resolve_device(args.device)
     condition_configs: list[tuple[str, str, dict[str, Any]]] = []
     unavailable: list[dict[str, str]] = []
@@ -557,6 +585,7 @@ def main(argv: list[str] | None = None) -> int:
             "overrides_json": (
                 str(args.overrides_json.resolve()) if args.overrides_json else None
             ),
+            "experiment_config": str(args.config.resolve()),
             "condition_overrides": condition_overrides,
         },
         "conditions": {
@@ -567,11 +596,15 @@ def main(argv: list[str] | None = None) -> int:
             "aura/optimization.py",
             "aura/AURA.py",
             "methods/MPPI.py",
-            "systems.py",
+            "methods/plan.py",
+            "propagators/propagator.py",
+            "propagators/double_integrator.py",
+            "propagators/dubins_airplane.py",
+            "propagators/kinematic_car.py",
+            "propagators/pushing_object.py",
             "simulation/simulator.py",
             "simulation/pushing_model.py",
             "utils/utils.py",
-            "utils/control_duration.py",
         ],
     }
     if args.dry_run:

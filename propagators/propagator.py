@@ -10,9 +10,6 @@ import torch
 from ompl import base as ob
 from ompl import control as oc
 
-from utils.control_duration import validate_duration_range
-
-
 INTEGRATION_STEP = 0.1
 
 
@@ -71,13 +68,46 @@ class System:
         minimum_steps: int,
         maximum_steps: int,
     ) -> None:
-        minimum, maximum = validate_duration_range(
-            minimum_steps,
-            maximum_steps,
-        )
+        minimum = int(minimum_steps)
+        maximum = int(maximum_steps)
+        if minimum < 1:
+            raise ValueError(
+                f"min_control_duration must be at least 1, got {minimum}"
+            )
+        if maximum < minimum:
+            raise ValueError(
+                "max_control_duration must be greater than or equal to "
+                f"min_control_duration, got [{minimum}, {maximum}]"
+            )
         self.configure_propagation_step_size(step_size)
         self.min_control_duration = minimum
         self.max_control_duration = maximum
+
+    def propagation_step_count(self, duration_seconds: float) -> int:
+        """Return how many configured dynamics primitives a duration contains."""
+
+        if self.propagation_step_size is None:
+            raise RuntimeError(f"{self.name} has no configured propagation step size")
+        duration = float(duration_seconds)
+        ratio = duration / float(self.propagation_step_size)
+        steps = int(round(ratio))
+        tolerance = max(1e-8, abs(ratio) * 1e-8)
+        if not np.isfinite(duration) or duration <= 0.0 or abs(ratio - steps) > tolerance:
+            raise ValueError(
+                f"duration {duration:.17g}s is not an integer multiple of "
+                f"propagation_step_size {self.propagation_step_size:.17g}s"
+            )
+        if steps < self.min_control_duration:
+            raise ValueError(
+                f"duration has {steps} steps, below configured minimum "
+                f"{self.min_control_duration}"
+            )
+        if self.max_control_duration is not None and steps > self.max_control_duration:
+            raise ValueError(
+                f"duration has {steps} steps, above configured maximum "
+                f"{self.max_control_duration}"
+            )
+        return steps
 
     def set_state_bounds(self, bounds_values) -> None:
         """Set bounds for a real-vector state space."""

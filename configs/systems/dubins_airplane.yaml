@@ -1,0 +1,29 @@
+system_name: dubins_airplane
+title: 6D Dubins Airplane
+start_state: [0.10, 0.10, 0.15, 0.0, 0.0, 0.15]
+goal_state: [0.85, 0.85, 0.75, 0.0, 0.0, 0.15]
+state_bounds:
+  - [0.0, 1.0]
+  - [0.0, 1.0]
+  - [0.0, 1.0]
+  - [-3.141592653589793, 3.141592653589793]
+  - [-1.047197551196598, 1.047197551196598]
+  - [0.0, 0.3]
+control_bounds:
+  - [-0.3, 0.3]
+  - [-0.7853981633974483, 0.7853981633974483]
+  - [-0.7853981633974483, 0.7853981633974483]
+goal_threshold: 0.35
+propagation_step_size: 1.0
+min_control_duration: 1
+max_control_duration: 5
+obstacles: {enabled: false}
+
+environments:
+  gaussian:
+    panel_id: dubins_airplane_gaussian
+    panel_subtitle: Gaussian Noise
+    simulator_mode: gaussian
+    sampling_position_std: 0.003
+    sampling_rotation_std: 0.05
+    sampling_velocity_std: 0.003

@@ -46,14 +46,13 @@ from methods.Replanning import ReplanningRunner
 from geometry.object_model import get_obj_shape
 from geometry.pose import Pose, matrix_to_flat, project_se3_to_se2, wrap_to_pi
 from geometry.random_push import generate_path_form_params
-from methods.plan import OMPLPlanner
+from methods.plan import OMPLPlanner, duration_seconds_to_steps
 from simulation.pushing_model import get_pushing_model
 from utils.experiment_io import result_path, upsert_result
 from real_world.physical_robot import PhysicalUR10
 from simulation.simulator import Simulator
 from propagators import get_system
 from train_model import load_opt_model_2
-from utils.control_duration import duration_seconds_to_steps
 from utils.utils import arrayDistance
 
 _LATEST_OBJECT_STATE_FOR_PAUSES: np.ndarray | None = None

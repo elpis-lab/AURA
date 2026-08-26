@@ -1,0 +1,137 @@
+schema_version: 1
+experiment_name: full_time_comparison
+methods: [aura, restartReplanning]
+planners: [aorrt, sststar, aoest]
+num_simulation_trials: 100
+num_real_trials: 20
+base_seed: 260527699
+device: cuda:0
+process_timeout_seconds: 600.0
+results_dir: results/full_time_comparison
+
+condition_hyperparameters:
+  double_integrator_gaussian:
+    planning_time: 10.0
+    replanning_time_budget: 1.0
+    optimization_objective: control_duration
+    pruning_radius: 0.05
+    replanning_max_distance: 0.1
+    solution_continuity_max_distance: 0.4
+    optimizer_position_std: 0.05
+    optimizer_rotation_std: 0.0
+    optimizer_velocity_std: 0.05
+    optimizer_num_states: 2000
+    optimizer_num_steps: 500
+    optimizer_learning_rate: 0.01
+    max_steps: 200
+    task_time_limit_seconds: 300.0
+    timeout_seconds: 360
+  dubins_airplane_gaussian:
+    planning_time: 25.0
+    replanning_time_budget: 1.0
+    optimization_objective: control_duration
+    pruning_radius: 0.05
+    replanning_max_distance: 0.05
+    solution_continuity_max_distance: 2.0
+    optimizer_position_std: 0.01
+    optimizer_rotation_std: 0.1
+    optimizer_velocity_std: 0.01
+    optimizer_num_states: 5000
+    optimizer_num_steps: 1000
+    optimizer_learning_rate: 0.01
+    optimizer_max_children: 4
+    max_steps: 200
+    task_time_limit_seconds: 300.0
+    timeout_seconds: 360
+  kinematic_car_gaussian:
+    planning_time: 5.0
+    replanning_time_budget: 1.0
+    optimization_objective: control_duration
+    pruning_radius: 0.05
+    replanning_max_distance: 0.02
+    solution_continuity_max_distance: 0.2
+    optimizer_position_std: 0.005
+    optimizer_rotation_std: 0.05
+    optimizer_num_states: 2000
+    optimizer_num_steps: 1000
+    optimizer_learning_rate: 0.01
+    max_steps: 200
+    task_time_limit_seconds: 300.0
+    timeout_seconds: 360
+  kinematic_car_mujoco:
+    planning_time: 5.0
+    replanning_time_budget: 1.0
+    optimization_objective: control_duration
+    pruning_radius: 0.05
+    replanning_max_distance: 0.02
+    solution_continuity_max_distance: 0.25
+    randup_uncertainty_mode: matched_gaussian
+    randup_position_std: 0.01128
+    randup_rotation_std: 0.01111
+    optimizer_position_std: 0.03
+    optimizer_rotation_std: 0.06
+    optimizer_num_states: 2000
+    optimizer_num_steps: 1000
+    optimizer_learning_rate: 0.01
+    max_steps: 200
+    task_time_limit_seconds: 300.0
+    timeout_seconds: 500
+  pushing_gaussian: &pushing_task
+    planning_time: 3.0
+    replanning_time_budget: 1.0
+    optimization_objective: control_duration
+    pruning_radius: 0.05
+    replanning_max_distance: 0.075
+    solution_continuity_max_distance: 1.0
+    optimizer_position_std: 0.05
+    optimizer_rotation_std: 0.3
+    optimizer_num_states: 2000
+    optimizer_num_steps: 300
+    optimizer_learning_rate: 0.01
+    optimizer_max_children: 0
+    max_steps: 100
+    task_time_limit_seconds: 300.0
+    timeout_seconds: 360
+  pushing_mujoco:
+    <<: *pushing_task
+    randup_uncertainty_mode: matched_gaussian
+    randup_position_std: 0.00486
+    randup_rotation_std: 0.03986
+    timeout_seconds: 500
+  pushing_real:
+    planning_time: 4.0
+    replanning_time_budget: 1.0
+    task_time_limit_seconds: 300.0
+    optimization_objective: control_duration
+    pruning_radius: 0.08
+    replanning_max_distance: 0.1
+    solution_continuity_max_distance: 1.0
+    optimizer_position_std: 0.035
+    optimizer_rotation_std: 0.35
+    optimizer_num_states: 5000
+    optimizer_num_steps: 300
+    optimizer_learning_rate: 0.005
+
+real_world_methods:
+  mppi:
+    horizon_steps: 5
+    num_samples: 4096
+    temperature: 0.5
+    control_noise_std: [1.0, 0.20, 0.05]
+    action_duration_steps: 1
+    zero_anchor_pushing_model: false
+    short_push_cost_scale: 2000.0
+    minimum_preferred_push_distance: 0.0
+  randup:
+    randup_num_particles: 50
+    randup_padding_epsilon: 0.0
+    randup_planning_time: 10.0
+    randup_optimize_after_first_solution: true
+    randup_control_duration_min: 1
+    randup_control_duration_max: 1
+    randup_goal_requires_all_particles: false
+    randup_uncertainty_mode: aura_optimizer_gaussian
+    randup_position_std: 0.005
+    randup_rotation_std: 0.05
+    randup_velocity_std: 0.0
+    goal_bias: 0.30

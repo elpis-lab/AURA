@@ -15,5 +15,5 @@ export PYTHONPATH="${python_paths}${PYTHONPATH:+:${PYTHONPATH}}"
 export LD_LIBRARY_PATH="${library_paths}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 "${python_bin}" "${repo_root}/experiment/initial_time_sensitivity.py" \
-    --config "${repo_root}/configs/initial_time_experiment.yaml" "$@"
+    --config "${repo_root}/configs/experiments/initial_time_sensitivity.yaml" "$@"
 "${python_bin}" "${repo_root}/scripts/plot_initial_time.py"

@@ -1,0 +1,51 @@
+experiment_name: proposition2_recovery_condition
+method: aura
+num_trials: 5
+num_controls: 10
+base_seed: 20260824
+device: auto
+source: results/error_experiment/proposition2_step_metrics.csv
+calibration_root: results/error_experiment
+output_dir: results/error_experiment
+
+condition_hyperparameters:
+  double_integrator_gaussian:
+    control_duration: 0.1
+    batch_size: 5000
+    position_std: 0.01
+    rotation_std: 0.0
+    velocity_std: 0.003
+    gradient_iterations: 25
+    learning_rate: 0.05
+  kinematic_car_gaussian:
+    control_duration: 1.0
+    batch_size: 60000
+    position_std: 0.2
+    rotation_std: 0.8
+    velocity_std: 0.009
+    gradient_iterations: 400
+    learning_rate: 0.01
+  pushing_object_gaussian:
+    control_duration: 0.1
+    batch_size: 10000
+    position_std: 0.035
+    rotation_std: 0.35
+    velocity_std: 0.009
+    gradient_iterations: 1000
+    learning_rate: 0.0005
+  kinematic_car_mujoco:
+    control_duration: 1.0
+    batch_size: 30000
+    position_std: 0.04
+    rotation_std: 0.25
+    velocity_std: 0.003
+    gradient_iterations: 100
+    learning_rate: 0.03
+  pushing_object_mujoco:
+    control_duration: 2.0
+    batch_size: 30000
+    position_std: 0.05
+    rotation_std: 0.4
+    velocity_std: 0.003
+    gradient_iterations: 1000
+    learning_rate: 0.0005

@@ -11,7 +11,6 @@ from ompl import control as oc
 
 from propagators.propagator import System, wrap_angle_numpy, wrap_angle_torch
 from simulation.pushing_model import CRACKER_BOX_FLIPPED_SHAPE, get_pushing_model
-from utils.control_duration import duration_seconds_to_steps
 
 
 class PushingObject(System):
@@ -108,12 +107,7 @@ class PushingObject(System):
             raise RuntimeError(
                 "pushing_object requires a configured propagation step size"
             )
-        duration_steps = duration_seconds_to_steps(
-            duration,
-            self.propagation_step_size,
-            min_steps=self.min_control_duration,
-            max_steps=self.max_control_duration,
-        )
+        duration_steps = self.propagation_step_count(duration)
         model = get_pushing_model(
             self.object_shape,
             model_name=self.model_name,

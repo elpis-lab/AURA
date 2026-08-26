@@ -33,16 +33,12 @@ from ompl import util as ou
 from aura.AURA import AURA
 from methods.MPPI import MPPIController, parameters_from_config
 from methods.Replanning import ReplanningRunner
-from methods.plan import OMPLPlanner
+from methods.plan import OMPLPlanner, duration_seconds_to_steps
 from methods.RandUpRRT import RandUpRRTConfig
 from simulation.pushing_model import get_pushing_model
 from simulation.simulator import create_simulator
-from systems import get_system
+from propagators import get_system
 from train_model import load_opt_model_2
-from utils.control_duration import (
-    duration_seconds_to_steps,
-    task_execution_step_seconds,
-)
 from utils.childrenHandler import getOutgoingEdgeIndices
 from utils.experiment_io import (
     METHODS,
@@ -80,15 +76,39 @@ from utils.utils import (
 )
 
 
+SYSTEM_SOURCE_PATHS = tuple(
+    REPO_ROOT / "propagators" / name
+    for name in (
+        "propagator.py",
+        "double_integrator.py",
+        "dubins_airplane.py",
+        "kinematic_car.py",
+        "pushing_object.py",
+    )
+)
+
+SYSTEM_CONFIG_DIR = REPO_ROOT / "configs" / "systems"
+DEFAULT_EXPERIMENT_CONFIG = (
+    REPO_ROOT / "configs" / "experiments" / "task_time_efficiency.yaml"
+)
+TASK_TIME_CONDITIONS = (
+    ("double_integrator", "gaussian", True),
+    ("kinematic_car", "gaussian", True),
+    ("pushing_object", "gaussian", True),
+    ("dubins_airplane", "gaussian", True),
+    ("kinematic_car", "mujoco", True),
+    ("pushing_object", "mujoco", True),
+    ("pushing_object", "real", False),
+)
+
 RUNTIME_SOURCE_PATHS = (
     REPO_ROOT / "aura/AURA.py",
     REPO_ROOT / "methods" / "Replanning.py",
     REPO_ROOT / "aura/optimization.py",
     REPO_ROOT / "methods" / "plan.py",
-    REPO_ROOT / "systems.py",
+    *SYSTEM_SOURCE_PATHS,
     REPO_ROOT / "utils/auraHandler.py",
     REPO_ROOT / "utils/childrenHandler.py",
-    REPO_ROOT / "utils/control_duration.py",
     REPO_ROOT / "utils/utils.py",
     REPO_ROOT / "simulation/simulator.py",
     REPO_ROOT / "simulation/mujoco_car.py",
@@ -97,6 +117,13 @@ RUNTIME_SOURCE_PATHS = (
     REPO_ROOT / "simulation/pushing_model.py",
     REPO_ROOT / "experiment/task_time_efficiency.py",
     REPO_ROOT / "scripts/plot_task_time.py",
+    DEFAULT_EXPERIMENT_CONFIG,
+    *(SYSTEM_CONFIG_DIR / f"{name}.yaml" for name in (
+        "double_integrator",
+        "dubins_airplane",
+        "kinematic_car",
+        "pushing_object",
+    )),
     REPO_ROOT / "requirements.txt",
 )
 
@@ -108,6 +135,43 @@ OMPL_SOURCE_PATHS = (
     REPO_ROOT / "planners" / "sststar" / "SSTStar.cpp",
     REPO_ROOT / "planners" / "sststar" / "SSTStar.h",
 )
+
+
+def task_execution_step_seconds(
+    system_name: str,
+    propagation_step_size: float,
+) -> float:
+    """Return physical task time charged for one executed primitive."""
+
+    step_size = float(propagation_step_size)
+    if not np.isfinite(step_size) or step_size <= 0.0:
+        raise ValueError(
+            "propagation_step_size must be finite and positive, "
+            f"got {step_size}"
+        )
+    if str(system_name).strip().lower() in {
+        "pushing",
+        "push",
+        "pushing_object",
+    }:
+        return 2.0
+    return step_size
+
+
+def task_execution_seconds(
+    duration_steps: list[int] | tuple[int, ...],
+    system_name: str,
+    propagation_step_size: float,
+) -> float:
+    """Return total physical task time for executed primitive step counts."""
+
+    steps = [int(value) for value in duration_steps]
+    if any(value < 1 for value in steps):
+        raise ValueError("duration steps must all be at least 1")
+    return float(
+        sum(steps)
+        * task_execution_step_seconds(system_name, propagation_step_size)
+    )
 
 
 def _load_yaml(path: Path) -> dict:
@@ -211,12 +275,51 @@ def validate_environment(
     )
 
 
+def load_system_panel(
+    system_name: str,
+    environment: str,
+    experiment_config: dict[str, Any] | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    """Merge one system definition with its task-time environment settings."""
+
+    if experiment_config is None:
+        experiment_config = _load_yaml(DEFAULT_EXPERIMENT_CONFIG)
+    config_path = SYSTEM_CONFIG_DIR / f"{system_name}.yaml"
+    system_config = _load_yaml(config_path)
+    environment_config = system_config.get("environments", {}).get(environment)
+    condition_key = str(environment_config.get("panel_id", ""))
+    task_config = (experiment_config or {}).get(
+        "condition_hyperparameters", {}
+    ).get(condition_key)
+    if not isinstance(environment_config, dict) or not isinstance(task_config, dict):
+        raise ValueError(
+            f"{config_path} does not define task_time_efficiency/{environment}"
+        )
+    config = {
+        **{
+            key: value
+            for key, value in system_config.items()
+            if key not in {"environments", "title"}
+        },
+        **environment_config,
+        **task_config,
+        "panel_title": system_config["title"],
+    }
+    if environment == "real" and experiment_config is not None:
+        real_methods = experiment_config.get("real_world_methods", {})
+        config["mppi"] = dict(real_methods.get("mppi", {}))
+        config.update(real_methods.get("randup", {}))
+        config["num_trials"] = int(experiment_config["num_real_trials"])
+    return config_path, config
+
+
 def freeze_manifest(path: Path, *, device: str, allow_incomplete: bool) -> dict:
     source = _load_yaml(path)
     panels = []
-    for item in source.get("panels", []):
-        config_path = _resolve_repo_path(str(item["config"]))
-        config = _load_yaml(config_path)
+    for system_name, environment, execute in TASK_TIME_CONDITIONS:
+        config_path, config = load_system_panel(
+            system_name, environment, source
+        )
         if int(config["min_control_duration"]) >= int(config["max_control_duration"]):
             raise ValueError(
                 f"production panel {config.get('panel_id')} does not have min < max"
@@ -227,7 +330,7 @@ def freeze_manifest(path: Path, *, device: str, allow_incomplete: bool) -> dict:
                 "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
                 "config_hash": data_hash(config),
                 "config": config,
-                "execute": bool(item.get("execute", True)),
+                "execute": execute,
             }
         )
     runtime_sources = _source_inventory()
@@ -268,7 +371,7 @@ def freeze_manifest(path: Path, *, device: str, allow_incomplete: bool) -> dict:
         }
     )
     frozen["manifest_id"] = (
-        "fig7-vardur-"
+        "task-time-"
         + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         + "-"
         + frozen["configuration_hash"][:10]
@@ -1179,9 +1282,17 @@ def _worker_command(
 
 
 def run_task_time_campaign(arguments: list[str] | None = None) -> None:
+    preliminary = argparse.ArgumentParser(add_help=False)
+    preliminary.add_argument(
+        "--manifest", default=str(DEFAULT_EXPERIMENT_CONFIG.relative_to(REPO_ROOT))
+    )
+    known, _ = preliminary.parse_known_args(arguments)
+    experiment_defaults = _load_yaml(_resolve_repo_path(known.manifest))
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--manifest", default="configs/fig7/manifest.yaml", help="Source manifest YAML."
+        "--manifest",
+        default=str(DEFAULT_EXPERIMENT_CONFIG.relative_to(REPO_ROOT)),
+        help="Task-time experiment YAML.",
     )
     parser.add_argument("--frozen-manifest")
     parser.add_argument("--config", help="Optional single panel config filter/path.")
@@ -1193,10 +1304,19 @@ def run_task_time_campaign(arguments: list[str] | None = None) -> None:
     parser.add_argument("--run", type=int)
     parser.add_argument("--seed-start", type=int)
     parser.add_argument("--seed-end", type=int)
-    parser.add_argument("--num-trials", type=int)
-    parser.add_argument("--results-root")
-    parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument(
+        "--num-trials", type=int, default=int(experiment_defaults["num_simulation_trials"])
+    )
+    parser.add_argument(
+        "--results-root",
+        default=str(_resolve_repo_path(str(experiment_defaults["results_dir"]))),
+    )
+    parser.add_argument("--device", default=experiment_defaults["device"])
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=float(experiment_defaults["process_timeout_seconds"]),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--resume", action="store_true")
@@ -1274,7 +1394,7 @@ def run_task_time_campaign(arguments: list[str] | None = None) -> None:
         }
     )
     frozen["manifest_id"] = (
-        "fig7-vardur-"
+        "task-time-"
         + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         + "-"
         + frozen["campaign_configuration_hash"][:10]
@@ -1565,7 +1685,7 @@ MPPI_WALL_TIME_DEFINITION = (
 MPPI_SOURCE_PATHS = (
     REPO_ROOT / "methods" / "MPPI.py",
     Path(__file__).resolve(),
-    REPO_ROOT / "systems.py",
+    *SYSTEM_SOURCE_PATHS,
     REPO_ROOT / "simulation" / "simulator.py",
     REPO_ROOT / "simulation" / "pushing_model.py",
 )
@@ -2258,7 +2378,7 @@ SOURCE_PATHS = (
     Path(__file__).resolve(),
     REPO_ROOT / "methods" / "RandUpRRT.py",
     REPO_ROOT / "methods" / "plan.py",
-    REPO_ROOT / "systems.py",
+    *SYSTEM_SOURCE_PATHS,
     REPO_ROOT / "simulation" / "simulator.py",
     REPO_ROOT / "utils" / "utils.py",
 )

@@ -23,11 +23,14 @@ from ompl import util as ou
 
 from experiment.task_time_efficiency import plan_until_solution, run_aura
 from methods.plan import OMPLPlanner
-from systems import get_system
+from propagators import get_system
 from utils.utils import arrayDistance, is_state_array_valid, normalize_obstacle_config
 
 
-DEFAULT_CONFIG = REPO_ROOT / "configs" / "initial_time_experiment.yaml"
+DEFAULT_CONFIG = (
+    REPO_ROOT / "configs" / "experiments" / "initial_time_sensitivity.yaml"
+)
+SYSTEM_CONFIG = REPO_ROOT / "configs" / "systems" / "kinematic_car.yaml"
 FIELDS = (
     "run_number",
     "planner",
@@ -64,7 +67,21 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_config(path: Path) -> dict:
-    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    experiment = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    system = yaml.safe_load(SYSTEM_CONFIG.read_text(encoding="utf-8")) or {}
+    system_values = {
+        key: value
+        for key, value in system.items()
+        if key not in {"environments", "title"}
+    }
+    config = {
+        **system_values,
+        **system["environments"]["gaussian"],
+        **experiment,
+        "planner_name": experiment["planner"],
+        "num_runs": experiment["num_trials"],
+        "seed": experiment["base_seed"],
+    }
     required = (
         "planner_name",
         "results_dir",

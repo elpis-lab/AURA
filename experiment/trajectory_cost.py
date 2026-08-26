@@ -40,11 +40,16 @@ import numpy as np
 import yaml
 
 from methods.plan import OMPLPlanner
-from systems import get_system
+from propagators import get_system
 from utils.experiment_io import stable_seed, write_csv, write_json
 
 
 PLANNERS = ("aorrt", "aoest", "sststar")
+SYSTEMS = ("double_integrator", "kinematic_car", "pushing_object", "dubins_airplane")
+SYSTEM_CONFIG_DIR = REPO_ROOT / "configs" / "systems"
+DEFAULT_EXPERIMENT_CONFIG = (
+    REPO_ROOT / "configs" / "experiments" / "trajectory_cost.yaml"
+)
 DEFAULT_CONFIG = {
     "system_name": "kinematic_car",
     "start_state": [0.0, 0.0, 0.0],
@@ -60,12 +65,37 @@ DEFAULT_CONFIG = {
 }
 
 
-def load_config(path: str | Path) -> dict:
+def load_yaml(path: str | Path) -> dict:
     with Path(path).open(encoding="utf-8") as stream:
         loaded = yaml.safe_load(stream) or {}
     if not isinstance(loaded, dict):
         raise ValueError(f"config file must contain a mapping: {path}")
-    config = {**DEFAULT_CONFIG, **loaded}
+    return loaded
+
+
+def load_config(
+    path: str | Path,
+    experiment_path: str | Path = DEFAULT_EXPERIMENT_CONFIG,
+) -> dict:
+    system_config = load_yaml(path)
+    experiment_config = load_yaml(experiment_path)
+    system_values = {
+        key: value
+        for key, value in system_config.items()
+        if key not in {"environments", "title"}
+    }
+    trajectory_values = experiment_config["system_hyperparameters"][
+        system_config["system_name"]
+    ]
+    config = {
+        **DEFAULT_CONFIG,
+        **system_values,
+        **trajectory_values,
+        **{
+            "optimization_objective": experiment_config["optimization_objective"],
+            "refinement_time": experiment_config["refinement_time"],
+        },
+    }
     config["system_name"] = str(config["system_name"])
     config["start_state"] = np.asarray(config["start_state"], dtype=float)
     config["goal_state"] = np.asarray(config["goal_state"], dtype=float)
@@ -211,15 +241,9 @@ CSV_FIELDS = (
 )
 
 
-SYSTEMS = ("double_integrator", "kinematic_car", "pushing_object", "dubins_airplane")
-
 CONFIG_PATHS = {
-    name: REPO_ROOT / "configs" / "exp1" / f"{name}.yaml" for name in SYSTEMS
+    name: SYSTEM_CONFIG_DIR / f"{name}.yaml" for name in SYSTEMS
 }
-# dubins_airplane.yaml is the Stage-1 10-trial preview config (num_runs=10,
-# a different results_dir); Stage-2's 100-trial sweep uses its own file with
-# a wider planning_times range so the original preview stays reproducible.
-CONFIG_PATHS["dubins_airplane"] = REPO_ROOT / "configs" / "exp1" / "dubins_airplane_stage2.yaml"
 
 # --------------------------------------------------------------------------
 # Execution-coupled AURA replanning: replan for the current plan's first
@@ -490,7 +514,7 @@ def run_once_execution_coupled(
 
 
 def _worker_planner(args: argparse.Namespace) -> None:
-    config = load_config(str(args.config))
+    config = load_config(str(args.config), args.experiment_config)
     row = run_once_execution_coupled(
         config,
         args.planner,
@@ -541,6 +565,7 @@ def orchestrate(
     max_parallel: int,
     results_root: Path,
     scratch_root: Path,
+    experiment_config: Path,
     *,
     job_timeout: float = 600.0,
     resume: bool = False,
@@ -586,6 +611,7 @@ def orchestrate(
         command = _worker_command(
             "planner",
             config=CONFIG_PATHS[job["system"]],
+            experiment_config=experiment_config,
             planner=job["planner"],
             run_number=job["run_number"],
             planning_time=job["planning_time"],
@@ -658,7 +684,18 @@ def _collect_results(
 
 
 def main(arguments: list[str] | None = None) -> None:
+    global PLANNERS
+
+    preliminary = argparse.ArgumentParser(add_help=False)
+    preliminary.add_argument(
+        "--experiment-config", type=Path, default=DEFAULT_EXPERIMENT_CONFIG
+    )
+    known, _ = preliminary.parse_known_args(arguments)
+    experiment_config = load_yaml(known.experiment_config)
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--experiment-config", type=Path, default=known.experiment_config
+    )
     parser.add_argument("--worker-planner", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--planner", default=None)
@@ -669,13 +706,19 @@ def main(arguments: list[str] | None = None) -> None:
     parser.add_argument("--output", type=Path, default=None)
 
     parser.add_argument("--systems", nargs="+", default=list(SYSTEMS))
-    parser.add_argument("--base-seed", type=int, default=42)
-    parser.add_argument("--num-runs", type=int, default=100)
-    parser.add_argument("--max-parallel", type=int, default=12)
+    parser.add_argument(
+        "--base-seed", type=int, default=int(experiment_config["base_seed"])
+    )
+    parser.add_argument(
+        "--num-runs", type=int, default=int(experiment_config["num_trials"])
+    )
+    parser.add_argument(
+        "--max-parallel", type=int, default=int(experiment_config["max_parallel"])
+    )
     parser.add_argument(
         "--results-root",
         type=Path,
-        default=REPO_ROOT / "results/trajectory_cost_comparison",
+        default=REPO_ROOT / str(experiment_config["results_dir"]),
     )
     parser.add_argument(
         "--scratch-root",
@@ -684,8 +727,13 @@ def main(arguments: list[str] | None = None) -> None:
         help="Temporary worker output (removed after a successful campaign).",
     )
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--job-timeout", type=float, default=600.0)
+    parser.add_argument(
+        "--job-timeout",
+        type=float,
+        default=float(experiment_config["job_timeout_seconds"]),
+    )
     args = parser.parse_args(arguments)
+    PLANNERS = tuple(str(value) for value in experiment_config["planners"])
 
     if args.worker_planner:
         _worker_planner(args)
@@ -697,6 +745,7 @@ def main(arguments: list[str] | None = None) -> None:
         int(args.max_parallel),
         Path(args.results_root),
         Path(args.scratch_root or (Path(args.results_root) / ".work")),
+        args.experiment_config.resolve(),
         job_timeout=float(args.job_timeout),
         resume=bool(args.resume),
     )

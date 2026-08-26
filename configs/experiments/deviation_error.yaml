@@ -1,0 +1,57 @@
+experiment_name: deviation_error
+methods: [aura, mppi, open_loop]
+num_trials: 100
+num_controls: 10
+base_seed: 42
+device: auto
+bootstrap_resamples: 10000
+results_dir: results/error_experiment
+
+condition_hyperparameters:
+  double_integrator__gaussian:
+    simulator_config:
+      propagation_step_size: 0.1
+      sampling_velocity_std: 0.001
+    aura:
+      batch_size: 5000
+      position_std: 0.01
+      rotation_std: 0.0
+      velocity_std: 0.003
+      gradient_iterations: 25
+      learning_rate: 0.05
+  kinematic_car__gaussian:
+    simulator_config: {propagation_step_size: 0.1}
+    aura:
+      batch_size: 5000
+      position_std: 0.01
+      rotation_std: 0.1
+      velocity_std: 0.009
+      gradient_iterations: 25
+      learning_rate: 0.05
+  pushing_object__gaussian:
+    simulator_config: {propagation_step_size: 0.1}
+    aura:
+      batch_size: 10000
+      position_std: 0.035
+      rotation_std: 0.35
+      velocity_std: 0.009
+      gradient_iterations: 1000
+      learning_rate: 0.0005
+  kinematic_car__mujoco:
+    simulator_config: {propagation_step_size: 0.1}
+    aura:
+      batch_size: 5000
+      position_std: 0.01
+      rotation_std: 0.1
+      velocity_std: 0.003
+      gradient_iterations: 25
+      learning_rate: 0.05
+  pushing_object__mujoco:
+    simulator_config: {propagation_step_size: 2.0}
+    aura:
+      batch_size: 10000
+      position_std: 0.035
+      rotation_std: 0.35
+      velocity_std: 0.003
+      gradient_iterations: 1000
+      learning_rate: 0.0005
