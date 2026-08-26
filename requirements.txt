@@ -1,0 +1,34 @@
+# Python 3.10 is required by the repository's custom OMPL binding.
+# Build that binding separately with: bash scripts/build_ompl.sh
+# Do not install the unrelated `ompl` package from PyPI.
+
+# Core methods and experiments
+numpy
+scipy
+torch
+PyYAML
+tqdm
+
+# Plotting and rendering
+matplotlib
+seaborn
+Pillow
+
+# Simulation and geometry
+# MuJoCo 3.8 changed the default convex-contact pipeline; 3.7 preserves the
+# benchmark's authored car contact dynamics.
+mujoco==3.7.0
+mink==0.0.13
+open3d
+rtree
+shapely
+trimesh
+
+# Real-world interfaces. websocket-client enables the hand-camera WebSocket
+# transport instead of silently falling back to HTTP polling.
+python-socketio[client]
+websocket-client
+ur-rtde
+
+# Test suite
+pytest
