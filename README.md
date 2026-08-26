@@ -1,269 +1,289 @@
 # AURA: Asymptotically-Optimal Uncertainty-Robust Replanning Algorithm for Kinodynamic Systems
 
 <p align="center">
-  <img src="docs/overview.png" alt="AURA main result" width="100%">
+  <img src="docs/overview.png" alt="AURA overview" width="100%">
 </p>
 <p align="center">
-  <img src="docs/replanning_optimization.png" alt="AURA replanning and optimization results" width="90%">
+  <img src="docs/replanning_optimization.png" alt="AURA replanning and optimization" width="90%">
 </p>
-AURA is a meta-planner framework for kinodynamic motion planning under motion uncertainty. It combines an asymptotically optimal sampling-based planner with online replanning and local control optimization, so execution can keep improving the planned trajectory while correcting tracking error.
 
-Paper:
+AURA is a meta-planning framework for kinodynamic motion planning under motion uncertainty. It combines an asymptotically optimal sampling-based planner, concurrent replanning, and differentiable local control optimization to improve a nominal trajectory while correcting execution error.
 
 ## Contents
 
-1. [Repository Layout](#repository-layout)
-2. [Main Algorithm Files](#main-algorithm-files)
-   - [AURA.py](#aurapy)
-   - [optimization.py](#optimizationpy)
-   - [plan.py](#planpy)
-   - [Replanning.py](#replanningpy)
-   - [systems.py](#systemspy)
-3. [Folders](#folders)
-   - [configs](#configs)
-   - [experiments](#experiments)
-   - [simulation](#simulation)
-   - [real_world](#real_world)
-   - [geometry](#geometry)
-   - [models](#models)
-   - [learned_models](#learned_models)
-   - [scripts](#scripts)
-   - [utils](#utils)
-4. [Evaluation](#evaluation)
-   - [Cost Comparison](#cost-comparison)
-   - [Tracking-Error Evaluation](#tracking-error-evaluation)
-   - [Wall-Time Evaluation](#wall-time-evaluation)
-   - [Hyperparameter Analysis](#hyperparameter-analysis)
-   - [Real-World Execution](#real-world-execution)
-5. [Results](#results)
-6. [Notes](#notes)
+1. [Installation](#installation)
+2. [Repository Layout](#repository-layout)
+3. [Main Algorithm Files](#main-algorithm-files)
+4. [Configuration](#configuration)
+5. [Experiments](#experiments)
+6. [Real-World Execution](#real-world-execution)
+7. [Results](#results)
+8. [Reproducibility Notes](#reproducibility-notes)
+
+## Installation
+
+The project uses Python 3.10 and a custom OMPL build containing `AORRT`, `AOEST`, and `SSTStar`.
+
+```bash
+python3.10 -m pip install -r requirements.txt
+AURA_OMPL_SOURCE=/path/to/ompl \
+  AURA_PYTHON_BIN=python3.10 \
+  bash scripts/build_ompl.sh
+```
+
+`requirements.txt` installs the Python dependencies, including the pinned MuJoCo version and real-world interfaces. It intentionally does not install the unrelated PyPI `ompl` package. The custom planner sources backed up under `planners/` must be present in the OMPL source tree supplied through `AURA_OMPL_SOURCE` before building.
+
+The experiment launchers configure the repository-local OMPL and Torch library paths automatically. To run tests directly, expose the local OMPL installation:
+
+```bash
+export PYTHONPATH="$PWD/.deps/ompl/lib/python3.10/site-packages:$PWD/.deps/python${PYTHONPATH:+:$PYTHONPATH}"
+export LD_LIBRARY_PATH="$PWD/.deps/ompl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+python3.10 -m pytest -q
+```
 
 ## Repository Layout
+
 ```text
 AURA/
-├── AURA.py                         # Main AURA execution loop
-├── Replanning.py                   # Restart replanning baseline
-├── optimization.py                 # Local control optimization used by AURA
-├── plan.py                         # OMPL planning wrapper and solution extraction
-├── systems.py                      # Dynamical system definitions and OMPL spaces
-├── train_model.py                  # Learned pushing dynamics training/loading utilities
-├── run_initial_time_experiments.sh # Initial-planning-time sweep wrapper
-├── run_performance_experiments.sh  # Wall-time comparison wrapper
-├── run_error_experiments.sh        # Tracking-error experiment wrapper
-├── configs/                        # YAML files for experiment configs
-├── experiments/                    # Evaluation experiments
-├── simulation/                     # Gaussian/MuJoCo simulation and assets
-├── real_world/                     # UR10 / camera
-├── geometry/                       # Geometry, poses, trajectories, object utilities
-├── models/                         # Neural model definitions and loss functions
-├── learned_models/                 # Trained models
-├── scripts/                        # Plotting and result visualization scripts
-├── utils/                          # Shared helpers and config/result utilities
-└── docs/results/                   # README images
+├── aura/
+│   ├── AURA.py                    # AURA execution and replanning loop
+│   └── optimization.py            # Batched local control optimization
+├── methods/
+│   ├── plan.py                    # OMPL setup, durations, and solution extraction
+│   ├── Replanning.py              # From-scratch replanning baseline
+│   ├── MPPI.py                    # Vectorized MPPI controller
+│   └── RandUpRRT.py               # Particle-based robust RRT baseline
+├── propagators/                   # One dynamics/OMPL adapter per system
+├── planners/                      # Backups of custom OMPL planner sources
+├── configs/
+│   ├── systems/                   # Dynamics, bounds, tasks, and environments
+│   └── experiments/               # Methods and experiment hyperparameters
+├── experiment/                    # Five experiment entry points
+├── simulation/                    # Gaussian and MuJoCo execution backends
+├── real_world/                    # UR10, camera, RTDE, and hardware execution
+├── geometry/                      # Pose, object, point-cloud, and push geometry
+├── models/                        # Learned-model definitions and losses
+├── learned_models/                # Trained pushing checkpoints
+├── scripts/                       # Launchers, plotters, and visualization tools
+├── utils/                         # Shared planner and experiment helpers
+├── tests/                         # Unit and integration checks
+└── train_model.py                 # Pushing-model training/loading utilities
 ```
 
 ## Main Algorithm Files
-### `AURA.py`
-This file contains the class for main runtime algorithm. It starts from an initial OMPL solution, executes controls through a simulator or real-world interface, runs replanning and local optimization in parallel, and chooses the next control based on true observed state and the best current plan.
 
-- `AURA.AURAResult`: Structured return object with final state, cost, tracking error, trajectories, final plan, and status.
-- `AURA.run(...)`: The main execution loop. It executes the next control, compares actual vs predicted state, manages replanning/optimization threads, and records trajectories.
-- `AURA.replanning(...)`: Continues resolving the planner while execution is happening.
-- `pick_next_control(...)`: Chooses between the best optimized control for the next execution cycle.
+### `aura/AURA.py`
 
-### `optimization.py`
-This file implements the local control optimizer used by AURA. It samples possible future execution states around the next state, evaluates candidate controls against reachable child states, and uses PyTorch to find controls that reduce expected tracking error. The optimizer is intentionally set to be anytime. `AURA` only has one execution window to use the result, so the optimizer returns the best available control within the deadline.
+Defines the main `AURA` runtime. It executes a nominal control, observes the resulting state, continues resolving the planning tree, optimizes recovery controls concurrently, and selects the next executable edge. `AURA.AURAResult` records the final state, trajectory cost, tracking errors, controls, durations, timing, replanning count, and terminal status.
 
-### `plan.py`
-Here is the wrapper for OMPL planning for the supported systems. It builds the OMPL simple setup, initializes propagators and validity checks, runs planners, extracts exact solutions, and converts OMPL paths into state/control/time arrays. It handles:
-- Planner selection (`aorrt`, `aoest`, and `sst`)
-- Start/goal setup,
-- Control duration and propagation step configuration,
-- Obstacle and state-validity checking,
+### `aura/optimization.py`
 
-### `Replanning.py`
-This file contains `ReplanningRunner`, the from-scratch-planning baseline. Unlike AURA, which preserves and improves an existing planning tree during execution, this baseline plans from the latest observed state.
+Implements duration-aware local control optimization with PyTorch. It samples possible execution states, propagates candidate controls through the analytical or learned dynamics, and minimizes the expected state error to reachable child states. Gradients are obtained through PyTorch autograd for the differentiable dynamics.
 
-### `systems.py`
-The planning systems and their dynamics are defined here:
-- `kinematicCar`: SE(2) non-holonomic car with velocity/steering controls.
-- `doubleIntegrator`: 3D double-integrator in a 6D state space.
-- `pushingObject`: SE(2) object pushing dynamics backed by the learned pushing model.
+### `methods/plan.py`
 
-Each system defines:
-- OMPL state and control spaces,
-- State/control bounds,
-- NumPy propagation,
-- OMPL propagators,
-- Dynamics wrappers.
+Owns the common OMPL planning interface:
 
-For a new task, this is the place to define its dynamics and planning spaces.
+- canonical planner selection: `aorrt`, `aoest`, `sststar`, or `randup_rrt`;
+- state and control spaces, validity checking, and planning objectives;
+- propagation-step and variable-duration conversion;
+- start/goal configuration and exact-solution extraction; and
+- typed control edges containing source, target, control, duration steps, and duration seconds.
 
-## Folders
-### `configs/`
-YAML configuration files for experiment batches.
-- `initial_time_experiment.yaml`: Settings for the initial planning time experiment.
-- `performance_double_integrator.yaml`: Settings for the wall time comparison.
+### `methods/Replanning.py`
 
-The runner scripts load these configs by default, but terminal arguments can override them.
+Defines the restart-replanning baseline. It discards the current tree and plans again from the latest observed state when recovery is required.
 
-### `experiments/`
-Evaluation scrips:
-- `cost_comparison_experiment.py`: compares planner solution costs over different offline planning-time budgets,
-- `error_experiment.py`: compares open-loop tracking error against optimized-control,
-- `real_error_experiment.py`: real-robot version of the tracking-error experiment,
-- `wall_time_experiment.py`: compares wall-time performance of AURA and RestartReplanning,
-- `initial_time_experiment.py`: runs AURA on the kinematic car while sweeping initial planning time and control duration.
+### `methods/MPPI.py`
 
+Defines a vectorized Model Predictive Path Integral controller for all four supported systems. It uses the same nominal dynamics, bounds, state conventions, learned pushing model, simulator, and task goal as the planning methods.
 
-Use the root bash wrappers for normal runs:
+### `methods/RandUpRRT.py`
 
-```bash
-./run_initial_time_experiments.sh
-./run_performance_experiments.sh
-./run_error_experiments.sh
+Implements the finite-particle robust-RRT baseline shown as **RobRRT** in the task-time figure. Each node stores a nominal state and a particle cloud. Every edge propagates the nominal state and all particles for the sampled duration; particle disturbances are independent, and the configured goal test can require every particle to enter the goal region.
+
+This is a sampled reachable-set approximation inspired by Robust-RRT, not an exact continuous reachable-set implementation. Its safety checks apply to the represented particles plus optional geometric padding, so the exact Robust-RRT completeness theorem is not claimed for these experiments.
+
+### `propagators/`
+
+The four canonical systems are:
+
+- `double_integrator`
+- `dubins_airplane`
+- `kinematic_car`
+- `pushing_object`
+
+Each system file owns its OMPL spaces, bounds, NumPy propagation, differentiable Torch propagation, OMPL adapter, and system-specific random-state sampling. `propagators/propagator.py` contains the shared `System` contract and numerical integration helpers. `propagators.get_system()` accepts only the canonical names above; there are no compatibility aliases.
+
+### `planners/`
+
+Contains repository backups of the nonstandard OMPL planner sources:
+
+- `planners/aorrt/aorrt.{h,cpp}`
+- `planners/aoest/AOEST.{h,cpp}`
+- `planners/sststar/SSTStar.{h,cpp}`
+
+The runtime imports these planners from the custom OMPL Python binding built by `scripts/build_ompl.sh`.
+
+## Configuration
+
+Configuration is split into one file per system and one file per experiment:
+
+```text
+configs/
+├── systems/
+│   ├── double_integrator.yaml
+│   ├── dubins_airplane.yaml
+│   ├── kinematic_car.yaml
+│   └── pushing_object.yaml
+└── experiments/
+    ├── trajectory_cost.yaml
+    ├── deviation_error.yaml
+    ├── task_time_efficiency.yaml
+    ├── initial_time_sensitivity.yaml
+    └── recovery_condition.yaml
 ```
 
-### `simulation/`
-Simulation packages:
-- `simulators.py`: common simulator interface and factory, plus Gaussian-noise simulators,
-- `mujoco_car.py`: MuJoCo kinematic-car simulator,
-- `mujoco_pushing.py`: MuJoCo UR10/object-pushing simulator,
-- `mujoco_video_renderer.py`: offscreen MuJoCo video rendering helper,
-- `mink_ik.py`: MuJoCo/Mink inverse-kinematics helper,
-- `pushing_dynamics.py`: learned pushing model loader,
-- `pushing_object_specs.py`: object dimensions for pushing,
-- `sim_demo.py`: demo launcher for simulated systems,
-- `visualize_mujoco_methods.py`: presentation-quality method visualizations,
-- `assets/`: MuJoCo XML files, meshes, object assets, and car models.
+System files contain dynamics, state/control bounds, start and goal states, obstacles, learned models, and Gaussian/MuJoCo/real-world environment settings. Experiment files contain the methods, planner/controller hyperparameters, seeds, trial counts, budgets, and canonical output directory. Each runner loads and merges the relevant layers automatically.
 
-### `real_world/`
-Real hardware support for UR10 execution:
-- `real_execution.py`: runs AURA or RestartReplanning on the physical robot,
-- `physical_robot.py`: main class for physical robot interface,
-- `camera.py`, `gripper.py`, `rtde.py`: hardware communication helpers.
+## Experiments
 
-### `geometry/`
-Geometry utilities used by planning, pushing, and visualization:
-- `pose.py`: pose conversions, quaternions, Euler angles, SE(2)/SE(3) helpers,
-- `random_push.py`: push parameter sampling and workspace path generation,
-- `trajectory.py`: trajectory interpolation utilities,
-- `object_model.py`: object shape helpers,
-- `point_cloud.py`: point-cloud utilities for mesh assets.
+The checked-in launchers use the configured canonical output directory. Repeating a trial rewrites that trial in the same experiment directory; a new folder is not created for every tuning setting.
 
-### `models/`
-Neural network model definitions and losses:
-- `model.py`, `torch_model.py`: MLP and model wrappers,
-- `torch_loss_se2.py`: SE(2)-aware loss functions and uncertainty-aware losses,
-- `physics.py`: simple analytic pushing equations.
+### Trajectory Cost Comparison
 
-### `learned_models/`
-Trained weights used by the pushing system. These files are needed when running the learned pushing model.
-
-### `scripts/`
-Plotting and post-processing scripts:
-- `plotting.py`: general workspace plotting, replay rendering, and demo plotting utilities,
-- `plotPerformance.py`: aggregate experiment plotting for performance metrics,
-- `plot_workspace_replay_surfaces.py`: summary plots from saved workspace replays.
-
-### `utils/`
-Shared utilities:
-- `configHandler.py`: config parsing and experiment-grid helpers,
-- `auraHandler.py`: AURA logging, diagnostics, and loss plotting helpers,
-- `solutionsHandler.py`: OMPL solution extraction helpers,
-- `childrenHandler.py`: planner tree child extraction,
-- `dataLoader.py`: data loading helpers,
-- `threadHandler.py`: older threaded execution helpers,
-- `utils.py`: common math, distance, state conversion, validity, and sampling helpers.
-
-## Evaluation
-The commands below use option templates. Replace bracketed values such as `[aorrt|aoest|sststar]`, `[N]`, and `[DIR]` with the values you want to run.
-
-### Cost Comparison
-Compares planner solution costs over different offline planning-time budgets.
-```bash
-python experiments/cost_comparison_experiment.py \
-  --planner-name [aorrt|aoest|sststar|all] \
-  --planning-times [SECONDS] \
-  --num-runs [N] \
-  --results-dir [DIR] \
-  --seed [N]
-```
-
-### Tracking-Error Evaluation
-Runs the naive-vs-optimized tracking-error experiment.
-```bash
-./run_error_experiments.sh \
-  [kinematic_car|double_integrator|pushing_object] \
-  [gaussian|mujoco] \
-  --num-controls [N] \
-  --num-trials [N] \
-  --duration [SECONDS] \
-  --optimizer-num-states [N] \
-  --optimizer-learning-rate [FLOAT]
-```
-
-### Wall-Time Evaluation
-Compares AURA and RestartReplanning on the double-integrator task (default).
-```bash
-./run_performance_experiments.sh \
-  --planner-name [aorrt|aoest|sststar|all] \
-  --method [aura|replanning|both] \
-  --num-runs [N] \
-  --results-dir [DIR] \
-  --planning-time [SECONDS] \
-  --replanning-time [SECONDS] \
-  --max-steps [N] \
-  [--overwrite]
-```
-To run exactly one repeat, use `--run-number [N]` instead of `--num-runs [N]`.
-
-### Hyperparameter Analysis
-Runs AURA over control durations and initial planning times. The default config is `configs/initial_time_experiment.yaml`.
-```bash
-./run_initial_time_experiments.sh \
-  --planner-name [aorrt|aoest|sststar] \
-  --control-durations [SECONDS] \
-  --planning-times [SECONDS] \
-  --num-runs [N] \
-  --results-dir [DIR] \
-  --optimizer-num-states [N] \
-  --optimizer-num-steps [N] \
-  --optimizer-learning-rate [FLOAT] \
-  --recovery-replanning-time [SECONDS]
-```
-Outputs include CSV summaries, PNG plots, and workspace replay files under `results/`.
-
-### Real-World Execution
-
-Real-world execution is not wrapped by a root bash script because it requires hardware and operator supervision.
+Compares AURA-refined and vanilla `AORRT`, `AOEST`, and `SSTStar` trajectories without execution noise.
 
 ```bash
-/usr/bin/python3 real_world/real_execution.py \
-  --method [aura|replanning] \
-  --goal [X Y THETA] \
-  --planning-time [SECONDS] \
-  --replanning-time [SECONDS] \
-  --max-runs [N]
+scripts/trajectory_cost.sh
+python3.10 scripts/plot_trajectory_cost.py
 ```
+
+Default output: `results/trajectory_cost_comparison/`.
+
+### Deviation-Error Comparison
+
+Compares step-wise tracking error for AURA, MPPI, and open-loop execution on fixed nominal references. The runner also generates its summary tables and figure.
+
+```bash
+scripts/deviation_error.sh
+```
+
+Default output: `results/error_experiment/`.
+
+### End-to-End Task-Time Efficiency
+
+Compares AURA, restart replanning (RR), MPPI, and the particle-based RobRRT baseline. The configured campaign covers double integrator, kinematic car, 6D Dubins airplane, and learned pushing under Gaussian noise, plus the kinematic-car and pushing MuJoCo tasks.
+
+```bash
+scripts/task_time_efficiency.sh --resume --max-parallel 1
+```
+
+The launcher defaults to all active baselines and the trial count in `configs/experiments/task_time_efficiency.yaml`. It freezes a campaign manifest, resumes completed rows when requested, validates the result matrix, and regenerates the task-time figure. To regenerate the figure from the current saved data without rerunning trials:
+
+```bash
+python3.10 scripts/plot_task_time.py
+```
+
+Default output: `results/full_time_comparison/`. The plotter uses every available run for each method independently; trial counts are not hard-coded or required to match.
+
+Planner edges use one inseparable `(source, target, control, duration_steps, duration_seconds)` contract. AURA and RR use the sampled variable edge duration. MPPI executes one propagation tick per receding-horizon action. For learned pushing, one model tick represents a complete two-second physical push, and model time and physical execution time are stored separately.
+
+The plotted task time is end-to-end blocking time:
+
+```text
+AURA = initial planning + executed control time + blocking recovery planning
+RR = initial planning + executed control time + blocking replanning
+MPPI = blocking controller computation + executed control time
+RobRRT = planning/replanning + executed control time
+```
+
+Concurrent AURA tree improvement and local optimization are recorded as diagnostics but are not double-counted when they fit inside the active execution interval. Every unsuccessful method is retained and receives the configured task-time cap rather than being dropped from the plot.
+
+### Initial-Time Sensitivity
+
+Sweeps initial planning time and maximum control duration for AURA and generates separate average and median task-time surfaces.
+
+```bash
+scripts/initial_time_sensitivity.sh
+```
+
+Default output: `results/initial_time_sensitivity/`.
+
+### Recovery-Condition Evaluation
+
+Evaluates the Proposition 2 recovery condition after first conditioning on execution error being within the calibrated bound.
+
+```bash
+python3.10 experiment/recovery_condition.py
+```
+
+To regenerate only the summary from saved measurements:
+
+```bash
+python3.10 experiment/recovery_condition.py --summarize-only
+```
+
+Default output: `results/error_experiment/`.
+
+## Real-World Execution
+
+The real-world code targets the UR10 pushing setup, the in-hand camera server, and the RH-P12-RN gripper connected through its URCap. Hardware commands are not part of the automated test suite.
+
+`scripts/run_real_world.py` runs exactly one MPPI or RobRRT physical trial using the start, goal, workspace, model, and hardware parameters from `configs/systems/pushing_object.yaml`. Omitting `--execute` performs a connection-free preview; adding it starts the live robot trial.
+
+```bash
+python3.10 scripts/run_real_world.py --method mppi --trial 1 --execute
+python3.10 scripts/run_real_world.py --method randup --trial 1 --execute
+python3.10 scripts/run_real_world.py --summary
+```
+
+The same runner can test the gripper without moving the arm or using the camera:
+
+```bash
+python3.10 scripts/run_real_world.py --test-gripper open
+python3.10 scripts/run_real_world.py --test-gripper close
+```
+
+`real_world/real_execution.py` contains the physical AURA and restart-replanning runner. Detailed hardware artifacts remain under the real-world output directory, while compact task-time rows are stored with the `pushing_real` panel in `results/full_time_comparison/`.
 
 ## Results
-### Cost Comparison
+
+Each experiment has one canonical results directory:
+
+```text
+results/
+├── trajectory_cost_comparison/
+├── error_experiment/
+├── full_time_comparison/
+└── initial_time_sensitivity/
+```
+
+Within an experiment, results are grouped by system/panel and method as required by that experiment. Rerunning the same indexed trial updates its existing result. Generated summaries and figures stay at the experiment root or its single `summary/` directory.
+
+### Trajectory Cost
+
 <p align="center">
-  <img src="docs/results/costComparison.png" alt="Cost comparison" width="100%">
+  <img src="docs/results/costComparison.png" alt="Trajectory-cost comparison" width="100%">
 </p>
 
-### Wall-Time Evaluation
+### End-to-End Task Time
+
 <p align="center">
-  <img src="docs/results/wallTimeComparison.png" alt="Wall-time comparison" width="100%">
+  <img src="docs/results/wallTimeComparison.png" alt="End-to-end task-time comparison" width="100%">
 </p>
 
-### Hyperparameters Analysis
+### Initial-Time Sensitivity
+
 <p align="center">
-  <img src="docs/results/hyperparameterStudy.png" alt="Initial-time sweep summary" width="90%">
+  <img src="docs/results/hyperparameterStudy.png" alt="Initial-time sensitivity" width="90%">
 </p>
 
+## Reproducibility Notes
 
-## Notes
-- MuJoCo assets live under `simulation/assets/`.
-- If PyTorch prints `Can't initialize NVML`, CUDA monitoring is unavailable in the current environment. CPU execution can still work, but GPU optimizer acceleration will not be available.
+- The experiment YAMLs define all default trial counts, seeds, method parameters, and output roots; command-line arguments are optional overrides.
+- The task-time campaign stores configuration, source, initial-plan, and disturbance hashes so resumed or imported rows can be audited.
+- AURA/RR paired trials share the same initial plan and deterministic disturbance schedule. MPPI and RobRRT use separate derived planning/controller streams and held-out execution streams.
+- Gaussian RobRRT rows use sampled process-noise particles. MuJoCo exposes model mismatch during execution; no worst-case guarantee over continuous disturbances is claimed.
+- MuJoCo assets live under `simulation/assets/`; learned pushing checkpoints live under `learned_models/`.
+- If PyTorch reports that NVML cannot be initialized, CPU execution can still run, but CUDA monitoring or optimizer acceleration may be unavailable.
