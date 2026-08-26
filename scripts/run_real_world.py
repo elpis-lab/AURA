@@ -25,6 +25,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+DEFAULT_SYSTEM_CONFIG = REPO_ROOT / "configs" / "systems" / "pushing_object.yaml"
+DEFAULT_EXPERIMENT_CONFIG = (
+    REPO_ROOT / "configs" / "experiments" / "task_time_efficiency.yaml"
+)
+
 METHODS = ("mppi", "randup")
 EXPECTED_TRIALS = 20
 RUNTIME_READY_ENV = "AURA_REAL_WORLD_RUNTIME_READY"
@@ -86,9 +91,27 @@ def stream_seed(master_seed: int, *labels: object) -> int:
 
 
 def load_config(path: Path) -> dict[str, Any]:
-    config = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(config, dict):
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
         raise ValueError(f"real-world config must be a mapping: {path}")
+    if "environments" not in loaded:
+        return loaded
+    experiment = yaml.safe_load(
+        DEFAULT_EXPERIMENT_CONFIG.read_text(encoding="utf-8")
+    ) or {}
+    config = {
+        **{
+            key: value
+            for key, value in loaded.items()
+            if key not in {"environments", "title"}
+        },
+        **loaded["environments"]["real"],
+        **experiment["condition_hyperparameters"]["pushing_real"],
+    }
+    real_methods = experiment.get("real_world_methods", {})
+    config["mppi"] = dict(real_methods.get("mppi", {}))
+    config.update(real_methods.get("randup", {}))
+    config["num_trials"] = int(experiment["num_real_trials"])
     return config
 
 
@@ -1001,7 +1024,7 @@ def parse_args(arguments: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--method", choices=METHODS)
     parser.add_argument("--trial", type=int)
     parser.add_argument(
-        "--config", default="configs/fig7/pushing_real.yaml"
+        "--config", default=str(DEFAULT_SYSTEM_CONFIG.relative_to(REPO_ROOT))
     )
     parser.add_argument("--seed", type=int)
     parser.add_argument("--device", default="cpu")

@@ -15,8 +15,6 @@ export PYTHONPATH="${python_paths}${PYTHONPATH:+:${PYTHONPATH}}"
 export LD_LIBRARY_PATH="${library_paths}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 exec "${python_bin}" "${repo_root}/experiment/task_time_efficiency.py" \
-    --manifest "${repo_root}/configs/fig7/manifest.yaml" \
-    --num-trials 100 \
-    --results-root "${repo_root}/results/full_time_comparison" \
+    --manifest "${repo_root}/configs/experiments/task_time_efficiency.yaml" \
     --all-baselines \
     "$@"

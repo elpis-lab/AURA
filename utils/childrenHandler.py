@@ -6,7 +6,7 @@ import numpy as np
 from ompl import control as oc
 from ompl import util as ou
 
-from utils.control_duration import ControlEdge, duration_seconds_to_steps
+from methods.plan import ControlEdge, duration_seconds_to_steps
 from utils.utils import arrayDistance, isStateEqual, log, state2list
 
 

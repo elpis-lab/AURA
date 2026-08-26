@@ -6,13 +6,13 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+from methods.plan import duration_seconds_to_steps
 from propagators import (
     DoubleIntegrator,
     DubinsAirplane,
     KinematicCar,
     PushingObject,
 )
-from utils.control_duration import duration_seconds_to_steps
 
 
 class Simulator(ABC):
