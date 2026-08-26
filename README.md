@@ -8,7 +8,7 @@
 </p>
 AURA is a meta-planner framework for kinodynamic motion planning under motion uncertainty. It combines an asymptotically optimal sampling-based planner with online replanning and local control optimization, so execution can keep improving the planned trajectory while correcting tracking error.
 
-Paper: [AURA: Asymptotically Optimal Uncertainty-Robust Replanning Algorithm for Kinodynamic Systems](https://arxiv.org/abs/2605.27699)
+Paper:
 
 ## Contents
 
