@@ -4,23 +4,25 @@ import threading
 from pathlib import Path
 import mujoco
 import mujoco.viewer
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
 from mujoco import mj_forward
 
 DEFAULT_CAR_XML_PATH = str(Path(__file__).resolve().parent / "assets" / "one_car.xml")
 
 
-class Sim:
+class MujocoCarSimulator:
+    """Low-level MuJoCo execution backend for the kinematic car."""
 
-    def __init__(self, xml_path=DEFAULT_CAR_XML_PATH, realtime_sync=True, viewer_sync_rate=10):
+    def __init__(
+        self,
+        xml_path=DEFAULT_CAR_XML_PATH,
+        realtime_sync=True,
+        viewer_sync_rate=10,
+    ):
 
         self.realtime_sync = realtime_sync
         self.viewer_sync_rate = viewer_sync_rate
 
-        self.L = 0.1385 + 0.158  # Wheelbase (m)
-        self.r = 0.0488          # Wheel radius (m)
-        self.W = 0.2300          # Track width (m)
+        self.r = 0.0488  # Wheel radius (m)
         self.rear_offset = 0.158
         self.throttle_ctrl_scale = 0.04
         self.steering_ctrl_scale = 1.0
@@ -32,43 +34,39 @@ class Sim:
 
         self.xml_path = xml_path
         self.m = mujoco.MjModel.from_xml_path(xml_path)
+        # MuJoCo 3.8 made multi-contact convex collision (MultiCCD) the
+        # default.  This legacy car model contains ellipsoidal wheel/floor
+        # pairs whose collision function is declared with a one-contact
+        # capacity, so the new default can abort with:
+        #   "returned 3 contacts ... expected at most 1 from mj_maxContact"
+        # Keep the contact model under which the asset was authored.
+        if hasattr(mujoco.mjtDisableBit, "mjDSBL_MULTICCD"):
+            self.m.opt.disableflags |= int(
+                mujoco.mjtDisableBit.mjDSBL_MULTICCD
+            )
         self.m.vis.global_.offwidth = max(int(self.m.vis.global_.offwidth), 1920)
         self.m.vis.global_.offheight = max(int(self.m.vis.global_.offheight), 1080)
         self.d = mujoco.MjData(self.m)
 
-        self.steering_id = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_ACTUATOR, "buddy_steering_pos")
-        self.throttle_id = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_ACTUATOR, "buddy_throttle_velocity")
+        self.steering_id = mujoco.mj_name2id(
+            self.m, mujoco.mjtObj.mjOBJ_ACTUATOR, "buddy_steering_pos"
+        )
+        self.throttle_id = mujoco.mj_name2id(
+            self.m, mujoco.mjtObj.mjOBJ_ACTUATOR, "buddy_throttle_velocity"
+        )
 
         self.sim_step = 0
         self.control_idx = 0
 
         self.controls = []
         self.durations = []
-        self.states = []
-        self.goal_region = None
-        self.plan_path = []
-        self.record_path = None
-        self.record_fps = 24.0
-        self.record_width = 1920
-        self.record_height = 1080
-        self.recorded_frames = []
-        self._record_renderer = None
-        self._record_last_time = -np.inf
-        self.fixed_camera_lookat = None
-        self.fixed_camera_distance = None
-        self.fixed_camera_azimuth = 90.0
-        self.fixed_camera_elevation = -90.0
-
         # Thread safety for reset
         self.reset_requested = False
         self.reset_completed = False
         self.close_requested = False
         self.sim_lock = threading.Lock()
 
-        self._do_reset()
-
-    def wrap_angle(self, angle):
-        return (angle + np.pi) % (2 * np.pi) - np.pi
+        self.reset_immediately()
     
     def quaternion_to_yaw(self, q):
         qw, qx, qy, qz = q
@@ -93,7 +91,7 @@ class Sim:
             print("Reset timed out")
             return False
     
-    def _do_reset(self):
+    def reset_immediately(self):
         with self.sim_lock:
             self.d.qpos[:] = 0.0
             self.d.qpos[2] = 0.1             # z height
@@ -105,9 +103,10 @@ class Sim:
 
             mj_forward(self.m, self.d)
 
-            # Settle simulation
-            for _ in range(100):
-                mujoco.mj_step(self.m, self.d)
+            # Do not pre-step the mesh-based car at the origin. Newer MuJoCo
+            # versions can create an over-complete transient floor/mesh contact
+            # there before the experiment wrapper installs the requested
+            # rear-axle pose. ``set_state`` performs mj_forward at that pose.
             
             # Reset control tracking
             self.control_idx = 0
@@ -148,193 +147,31 @@ class Sim:
 
             return np.array([x_rear, y_rear, theta, v_forward])
 
-    def _sync_follow_camera(self, viewer):
-        if self.fixed_camera_lookat is not None:
-            viewer.cam.lookat[:] = np.asarray(self.fixed_camera_lookat, dtype=float)
-            viewer.cam.distance = float(self.fixed_camera_distance or 6.0)
-            viewer.cam.azimuth = float(self.fixed_camera_azimuth)
-            viewer.cam.elevation = float(self.fixed_camera_elevation)
-            return
-
+    def set_state(self, state):
+        """Set the rear-axle SE(2) pose used by the planner interface."""
+        state = np.asarray(state, dtype=float).reshape(-1)
+        if state.size < 3:
+            raise ValueError(f"car state must contain x, y, theta; got {state}")
+        rear_x, rear_y, theta = state[:3]
+        chassis_x = rear_x + self.rear_offset * np.cos(theta)
+        chassis_y = rear_y + self.rear_offset * np.sin(theta)
         with self.sim_lock:
-            chassis_x = float(self.d.qpos[0])
-            chassis_y = float(self.d.qpos[1])
-        viewer.cam.lookat[:] = [chassis_x, chassis_y, 0.12]
-        viewer.cam.distance = 2.4
-        viewer.cam.azimuth = 135
-        viewer.cam.elevation = -45
+            self.d.qpos[0] = chassis_x
+            self.d.qpos[1] = chassis_y
+            self.d.qpos[2] = 0.1
+            self.d.qpos[3:7] = [
+                np.cos(0.5 * theta),
+                0.0,
+                0.0,
+                np.sin(0.5 * theta),
+            ]
+            self.d.qvel[:] = 0.0
+            self.d.ctrl[:] = 0.0
+            self.d.qacc[:] = 0.0
+            mujoco.mj_forward(self.m, self.d)
+        return self.get_state()
 
-    def set_fixed_camera(
-        self,
-        lookat,
-        distance: float,
-        azimuth: float = 90.0,
-        elevation: float = -90.0,
-    ):
-        self.fixed_camera_lookat = np.asarray(lookat, dtype=float).reshape(-1)[:3]
-        self.fixed_camera_distance = float(distance)
-        self.fixed_camera_azimuth = float(azimuth)
-        self.fixed_camera_elevation = float(elevation)
-
-    def _draw_goal_region(self, viewer):
-        if self.goal_region is None or not hasattr(viewer, "user_scn"):
-            return
-        self._add_goal_region_to_scene(viewer.user_scn)
-
-    def set_plan_path(self, states):
-        path = []
-        if states is not None:
-            for state in states:
-                arr = np.asarray(state, dtype=float).reshape(-1)
-                if arr.size >= 2:
-                    path.append(arr[:3].copy())
-        with self.sim_lock:
-            self.plan_path = path
-
-    def _draw_plan_path(self, viewer):
-        if not hasattr(viewer, "user_scn"):
-            return
-        self._add_plan_path_to_scene(viewer.user_scn)
-
-    def _add_plan_path_to_scene(self, scene, plan_path=None):
-        if plan_path is None:
-            with self.sim_lock:
-                path = [np.asarray(s, dtype=float).copy() for s in self.plan_path]
-        else:
-            path = plan_path
-        if path is None or len(path) < 2:
-            return
-        color = np.array([0.02, 0.25, 0.78, 0.92], dtype=float)
-        for start, end in zip(path[:-1], path[1:]):
-            if scene.ngeom >= scene.maxgeom:
-                return
-            a = np.asarray(start, dtype=float).reshape(-1)
-            b = np.asarray(end, dtype=float).reshape(-1)
-            if a.size < 2 or b.size < 2:
-                continue
-            from_pt = np.array([a[0], a[1], 0.035], dtype=float)
-            to_pt = np.array([b[0], b[1], 0.035], dtype=float)
-            if np.linalg.norm(to_pt - from_pt) < 1e-9:
-                continue
-            geom = scene.geoms[scene.ngeom]
-            mujoco.mjv_connector(
-                geom,
-                mujoco.mjtGeom.mjGEOM_CAPSULE,
-                0.018,
-                from_pt,
-                to_pt,
-            )
-            geom.rgba[:] = color
-            scene.ngeom += 1
-
-    def _add_goal_region_to_scene(self, scene):
-        if self.goal_region is None:
-            return
-        x, y, radius = self.goal_region
-        segments = 48
-        half_arc = np.pi * float(radius) / float(segments)
-        for i in range(segments):
-            if scene.ngeom >= scene.maxgeom:
-                return
-            angle = 2.0 * np.pi * float(i) / float(segments)
-            geom = scene.geoms[scene.ngeom]
-            mat = np.array(
-                [
-                    [np.cos(angle + np.pi / 2.0), -np.sin(angle + np.pi / 2.0), 0.0],
-                    [np.sin(angle + np.pi / 2.0), np.cos(angle + np.pi / 2.0), 0.0],
-                    [0.0, 0.0, 1.0],
-                ],
-                dtype=float,
-            )
-            mujoco.mjv_initGeom(
-                geom,
-                mujoco.mjtGeom.mjGEOM_BOX,
-                np.array([half_arc, 0.012, 0.004], dtype=float),
-                np.array([x + radius * np.cos(angle), y + radius * np.sin(angle), 0.010], dtype=float),
-                mat.reshape(-1),
-                np.array([0.05, 0.85, 0.12, 0.85], dtype=float),
-            )
-            scene.ngeom += 1
-
-    def start_recording(self, path, fps=24.0, width=1600, height=1000):
-        self.record_path = path
-        self.record_fps = float(fps)
-        self.record_width = min(int(width), int(self.m.vis.global_.offwidth))
-        self.record_height = min(int(height), int(self.m.vis.global_.offheight))
-        self.recorded_frames = []
-        self._record_last_time = -np.inf
-        self._record_renderer = None
-
-    def _record_frame(self):
-        if not self.record_path:
-            return
-        period = 1.0 / max(float(self.record_fps), 1e-6)
-        if float(self.d.time) - self._record_last_time < period:
-            return
-        with self.sim_lock:
-            if self.fixed_camera_lookat is None:
-                lookat = np.array(
-                    [float(self.d.qpos[0]), float(self.d.qpos[1]), 0.10],
-                    dtype=float,
-                )
-            else:
-                lookat = np.asarray(self.fixed_camera_lookat, dtype=float).copy()
-            snapshot = (
-                self.d.qpos.copy(),
-                self.d.qvel.copy(),
-                self.d.ctrl.copy(),
-                lookat,
-                [np.asarray(s, dtype=float).copy() for s in self.plan_path],
-            )
-            sim_time = float(self.d.time)
-        self.recorded_frames.append(snapshot)
-        self._record_last_time = sim_time
-
-    def save_recording(self):
-        if not self.record_path or not self.recorded_frames:
-            return
-        from simulation.mujoco_video_renderer import save_recording_in_subprocess
-
-        snapshots = list(self.recorded_frames)
-        print(
-            f"[mujoco video] rendering {len(snapshots)} frames -> {self.record_path}",
-            flush=True,
-        )
-        saved = save_recording_in_subprocess(
-            kind="car",
-            xml_path=self.xml_path,
-            snapshots=snapshots,
-            output_path=self.record_path,
-            fps=float(self.record_fps),
-            width=int(self.record_width),
-            height=int(self.record_height),
-            goal_region=self.goal_region,
-            camera_config=(
-                {
-                    "distance": float(self.fixed_camera_distance or 3.0),
-                    "azimuth": float(self.fixed_camera_azimuth),
-                    "elevation": float(self.fixed_camera_elevation),
-                }
-                if self.fixed_camera_lookat is not None
-                else None
-            ),
-        )
-        if saved:
-            print(f"[mujoco video] saved {self.record_path}")
-        else:
-            print(
-                "[WARNING] MuJoCo video renderer subprocess failed; "
-                "AURA execution results are still valid."
-            )
-        self.recorded_frames = []
-        self.record_path = None
-        self._record_renderer = None
-        
-    def receive_states(self, states):
-        self.states = states
-        return True
-    
-    def execute_segment(self, control, duration):       
+    def execute_segment(self, control, duration):
         # Add new segment to the end of the controls list
         self.controls.append(control)
         self.durations.append(duration)
@@ -353,89 +190,20 @@ class Sim:
 
         return self.get_state()
     
-    def plot_trajectory(self):
-        actual_trajectory_states = []
-
-        # Wait until states are received from the planner
-        while not self.states:
-            time.sleep(0.5)
-
-            # Check if simulation is still running
-            if not hasattr(self, 'm'): 
-                 return
-            
-        planned_trajectory_states = [(state[0], state[1]) for state in self.states]
-
-        plt.ion()
-        fig, ax = plt.subplots(figsize=(10, 10))
-        ax.set_xlabel('X (m)')
-        ax.set_ylabel('Y (m)')
-        ax.set_title('Planned vs Actual Trajectory')
-        ax.grid(True)
-        ax.set_aspect('equal', adjustable='box')
-
-        # Plot planned path
-        planned_x = [p[0] for p in planned_trajectory_states]
-        planned_y = [p[1] for p in planned_trajectory_states]
-        ax.plot(planned_x, planned_y, 'b--', linewidth=2, label='Planned', alpha=0.7)
-        ax.plot(planned_x[0], planned_y[0], 'go', markersize=10, label='Start')
-        ax.plot(planned_x[-1], planned_y[-1], 'ro', markersize=10, label='Goal')
-
-        # Initialize actual trajectory plots
-        actual_trajectory, = ax.plot([], [], 'r-', linewidth=2, label='Actual')
-        current_pos, = ax.plot([], [], 'r*', markersize=10)
-
-        ax.legend()
-        plt.show(block=False)
-
-        try:
-            # Poll for actual trajectory updates
-            while True:
-                state = self.get_state()
-                if state is None:
-                    break
-
-                x_rear, y_rear, theta, v_actual = state
-                actual_trajectory_states.append((x_rear, y_rear))
-
-                actual_x = [a[0] for a in actual_trajectory_states]
-                actual_y = [a[1] for a in actual_trajectory_states]
-                actual_trajectory.set_data(actual_x, actual_y)
-                current_pos.set_data([x_rear], [y_rear])
-
-                # Auto-scale
-                all_x = planned_x + actual_x
-                all_y = planned_y + actual_y
-                margin = 0.5
-                if all_x and all_y: # Ensure lists are not empty
-                    ax.set_xlim(min(all_x) - margin, max(all_x) + margin)
-                    ax.set_ylim(min(all_y) - margin, max(all_y) + margin)
-
-                plt.pause(0.1)
-
-                # Check if figure is still open
-                if not plt.fignum_exists(fig.number):
-                    break
-
-        except KeyboardInterrupt:
-            print("Trajectory plotting interrupted")
-        except Exception as e:
-            if 'Figure' not in str(e) and 'Tcl' not in str(e):
-                print(f"Plotting error: {e}")
-        finally:
-            plt.ioff()
-            plt.close(fig)
-
     def run_viewer(self):
         with mujoco.viewer.launch_passive(self.m, self.d) as viewer:
             while viewer.is_running() and not self.close_requested:
                 # Check reset request at the start of each iteration
                 if self.reset_requested:
-                    self._do_reset()
+                    self.reset_immediately()
                 
                 if self.controls and self.control_idx < len(self.controls):
                     # Get current segment duration
-                    segment_duration = self.durations[self.control_idx] if self.durations else 1.0
+                    segment_duration = (
+                        self.durations[self.control_idx]
+                        if self.durations
+                        else 1.0
+                    )
                     segment_end_time = self.d.time + segment_duration
 
                     # Get desired control from plan
@@ -469,12 +237,6 @@ class Sim:
 
                         # Update viewer
                         if self.sim_step % self.viewer_sync_rate == 0:
-                            if hasattr(viewer, "user_scn"):
-                                viewer.user_scn.ngeom = 0
-                            self._draw_goal_region(viewer)
-                            self._draw_plan_path(viewer)
-                            self._record_frame()
-                            self._sync_follow_camera(viewer)
                             viewer.sync()
 
                         # Realtime synchronization
@@ -500,12 +262,6 @@ class Sim:
 
                     # Update viewer
                     if self.sim_step % self.viewer_sync_rate == 0:
-                        if hasattr(viewer, "user_scn"):
-                            viewer.user_scn.ngeom = 0
-                        self._draw_goal_region(viewer)
-                        self._draw_plan_path(viewer)
-                        self._record_frame()
-                        self._sync_follow_camera(viewer)
                         viewer.sync()
 
                     # Realtime synchronization
