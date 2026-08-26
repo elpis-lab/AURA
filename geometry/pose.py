@@ -325,6 +325,30 @@ def matrix_to_quat(matrix: np.ndarray) -> np.ndarray:
     return xyzw_to_wxyz(r.as_quat())
 
 
+def matrix_to_flat(matrix: np.ndarray) -> np.ndarray:
+    """Convert one homogeneous transform to ``[x, y, z, qw, qx, qy, qz]``."""
+    matrix = np.asarray(matrix, dtype=float)
+    if matrix.shape != (4, 4):
+        raise ValueError(f"expected a 4x4 transform, got {matrix.shape}")
+    return np.concatenate([matrix[:3, 3], matrix_to_quat(matrix[:3, :3])])
+
+
+def project_se3_to_se2(
+    poses: np.ndarray | list[float], axis=(0.0, 1.0, 0.0)
+) -> np.ndarray:
+    """Project flat SE(3) pose vectors to ``[x, y, yaw]``."""
+    pose_array = np.asarray(poses, dtype=float)
+    single = pose_array.ndim == 1
+    pose_array = pose_array.reshape(-1, 7)
+    rotations = R.from_quat(pose_array[:, [4, 5, 6, 3]])
+    reference = np.broadcast_to(np.asarray(axis, dtype=float), (len(pose_array), 3))
+    rotated = rotations.apply(reference)
+    dots = np.sum(reference[:, :2] * rotated[:, :2], axis=1)
+    cross = reference[:, 0] * rotated[:, 1] - reference[:, 1] * rotated[:, 0]
+    result = np.column_stack((pose_array[:, :2], np.arctan2(cross, dots)))
+    return result[0] if single else result
+
+
 def flat_to_matrix(pose_flat: np.ndarray | list[float]) -> np.ndarray:
     """
     Convert flat pose(s) [x, y, z, qw, qx, qy, qz] to homogeneous matrix/matrices.

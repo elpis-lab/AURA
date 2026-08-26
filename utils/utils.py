@@ -454,8 +454,12 @@ def isStateValid(spaceInformation, state, system=None, config=None, obstacle_con
                 # If we can't extract position, skip obstacle check
                 return True
 
-    elif system == "dublin_airplane":
-        # SE3 state: x, y, z (we check obstacles in 2D, ignoring z)
+    elif system in (
+        "dublin_airplane",
+        "dubins_airplane",
+        "airplane",
+    ):
+        # Compound high-dimensional states store world position in subspace 0.
         try:
             if callable(state):
                 compound_state = state()
@@ -570,21 +574,91 @@ def is_state_array_valid(
 ) -> bool:
     """Numpy/list version of isStateValid for sampled execution and plotting checks."""
     state_np = np.asarray(state, dtype=float).reshape(-1)
+    if not np.all(np.isfinite(state_np)):
+        return False
     pos = _state_xy_from_array(state_np)
-    if pos is None:
-        return True
 
     cfg = config or {}
     bounds = cfg.get("state_bounds")
-    if bounds is not None and len(bounds) >= 2:
-        x, y = float(pos[0]), float(pos[1])
-        if x < float(bounds[0][0]) or x > float(bounds[0][1]):
+    if bounds is not None:
+        if len(bounds) > len(state_np):
             return False
-        if y < float(bounds[1][0]) or y > float(bounds[1][1]):
-            return False
+        for value, (lower, upper) in zip(state_np, bounds):
+            if float(value) < float(lower) or float(value) > float(upper):
+                return False
+
+    if pos is None:
+        return True
 
     occ = normalize_obstacle_config(obstacle_config or cfg.get("obstacles"))
     return _xy_is_obstacle_free(pos, occ, safety_radius_override=safety_radius_override)
+
+
+def are_state_arrays_valid(
+    states,
+    system=None,
+    config=None,
+    obstacle_config=None,
+    *,
+    safety_radius_override: float | None = None,
+) -> np.ndarray:
+    """Vectorized counterpart of :func:`is_state_array_valid`.
+
+    The collision conventions are deliberately identical to the scalar helper;
+    this avoids a Python call per particle in sampled reachable-set planners.
+    """
+
+    del system  # Current project obstacle geometry is defined in workspace x/y.
+    values = np.asarray(states, dtype=float)
+    if values.ndim == 1:
+        values = values.reshape(1, -1)
+    if values.ndim != 2 or values.shape[1] < 2:
+        raise ValueError("states must be a state vector or a 2-D state array")
+    valid = np.all(np.isfinite(values), axis=1)
+    positions = values[:, :2]
+    cfg = config or {}
+    bounds = cfg.get("state_bounds")
+    if bounds is not None:
+        if len(bounds) > values.shape[1]:
+            return np.zeros(len(values), dtype=bool)
+        for index, (lower, upper) in enumerate(bounds):
+            valid &= values[:, index] >= float(lower)
+            valid &= values[:, index] <= float(upper)
+
+    obstacles = normalize_obstacle_config(obstacle_config or cfg.get("obstacles"))
+    if obstacles is None or not obstacles.get("enabled", False):
+        return valid
+    safety = (
+        float(obstacles.get("safety_radius", 0.10))
+        if safety_radius_override is None
+        else float(safety_radius_override)
+    )
+    for cx, cy, radius in obstacles.get("circles", []):
+        squared = (
+            (positions[:, 0] - float(cx)) ** 2
+            + (positions[:, 1] - float(cy)) ** 2
+        )
+        valid &= squared >= (float(radius) + safety) ** 2
+    for xmin, ymin, xmax, ymax in obstacles.get("aabbs", []):
+        inside = (
+            (positions[:, 0] >= float(xmin) - safety)
+            & (positions[:, 0] <= float(xmax) + safety)
+            & (positions[:, 1] >= float(ymin) - safety)
+            & (positions[:, 1] <= float(ymax) + safety)
+        )
+        valid &= ~inside
+    for cx, cy, hx, hy, yaw in obstacles.get("boxes", []):
+        c, s = np.cos(-float(yaw)), np.sin(-float(yaw))
+        px = positions[:, 0] - float(cx)
+        py = positions[:, 1] - float(cy)
+        local_x = c * px - s * py
+        local_y = s * px + c * py
+        inside = (
+            (np.abs(local_x) < float(hx) + safety)
+            & (np.abs(local_y) < float(hy) + safety)
+        )
+        valid &= ~inside
+    return valid
 
 
 def sample_control_curve(
@@ -674,31 +748,23 @@ def state2list(state, state_type: str) -> list:
             )
             return []
 
-    elif state_type == "dublin_airplane":
-        # SE3 state: x, y, z, qw, qx, qy, qz (position + quaternion)
-        # For compound states, the state object itself is the compound state (don't call state())
-        # Check if state is callable (wrapper) or direct compound state
+    elif state_type in ("dublin_airplane", "dubins_airplane", "airplane"):
         try:
             if callable(state) and not isinstance(state, (list, tuple, np.ndarray)):
-                # State is a wrapper, call it to get the compound state
                 compound_state = state()
             else:
-                # State is already the compound state
                 compound_state = state
-
-            # Access compound state components: [0] is R^3 (position), [1] is SO(3) (quaternion)
             return [
-                compound_state[0][0],  # x
-                compound_state[0][1],  # y
-                compound_state[0][2],  # z
-                compound_state[1].w,  # quaternion w component
-                compound_state[1].x,  # quaternion x component
-                compound_state[1].y,  # quaternion y component
-                compound_state[1].z,  # quaternion z component
+                float(compound_state[0][0]),
+                float(compound_state[0][1]),
+                float(compound_state[0][2]),
+                float(compound_state[1].value),
+                float(compound_state[2][0]),
+                float(compound_state[3][0]),
             ]
         except (AttributeError, TypeError, IndexError) as e:
             print(
-                f"Warning: Could not access SE3 state components for type {type(state)}, error: {e}"
+                f"Warning: Could not access Dubins-airplane state for type {type(state)}, error: {e}"
             )
             return []
 
@@ -815,8 +881,12 @@ def isStateEqual(state1, state2, system, tolerance=1e-6):
     """Generic state comparison function that handles different systems."""
     if system in ("simple_car", "kinematic_car"):
         return isSE2Equal(state1, state2, tolerance)
-    elif system == "dublin_airplane":
-        return isSE3Equal(state1, state2, tolerance)
+    elif system in (
+        "dublin_airplane",
+        "dubins_airplane",
+        "airplane",
+    ):
+        return arrayDistance(state1, state2, system) < tolerance
     else:
         # Fallback to simple element-wise comparison
         if len(state1) != len(state2):
@@ -841,8 +911,6 @@ def normalize_quaternion(quat):
 
 
 def arrayDistance(array1, array2, system: str):
-    from ompl import base as ob
-
     # Normalize inputs to flat numpy arrays.
     array1 = np.asarray(array1, dtype=float).reshape(-1)
     array2 = np.asarray(array2, dtype=float).reshape(-1)
@@ -853,38 +921,24 @@ def arrayDistance(array1, array2, system: str):
         "pushing": "pushing_object",
         "pushing_object": "pushing_object",
         "double_integrator": "double_integrator",
+        "dublin_airplane": "dubins_airplane",
+        "airplane": "dubins_airplane",
+        "dubins_airplane": "dubins_airplane",
         "position": "position",
     }
     system_key = system_alias.get(system, system)
 
     if system_key in ("kinematic_car", "pushing_object"):
-        # Check if arrays have enough elements for SE2
         if len(array1) < 3 or len(array2) < 3:
             raise ValueError(
                 f"SE2 states need at least 3 elements, got {len(array1)} and {len(array2)}"
             )
-
-        # Use OMPL's SE2StateSpace distance function to match what addNoise uses
-        se2_space = ob.SE2StateSpace()
-        bounds = ob.RealVectorBounds(2)
-        bounds.setLow(-10.0)
-        bounds.setHigh(10.0)
-        se2_space.setBounds(bounds)
-
-        # Create OMPL states
-        ompl_state1 = se2_space.allocState()
-        ompl_state2 = se2_space.allocState()
-
-        # Set state components
-        ompl_state1.setX(array1[0])
-        ompl_state1.setY(array1[1])
-        ompl_state1.setYaw(array1[2])
-        ompl_state2.setX(array2[0])
-        ompl_state2.setY(array2[1])
-        ompl_state2.setYaw(array2[2])
-
-        # Compute distance using OMPL's SE2 state space distance function
-        return se2_space.distance(ompl_state1, ompl_state2)
+        translation = float(np.linalg.norm(array1[:2] - array2[:2]))
+        yaw = float(
+            abs((array1[2] - array2[2] + np.pi) % (2.0 * np.pi) - np.pi)
+        )
+        # Match OMPL SE2StateSpace: R2 has weight 1 and SO2 weight 0.5.
+        return translation + 0.5 * yaw
 
     if system_key == "double_integrator":
         if len(array1) < 6 or len(array2) < 6:
@@ -893,6 +947,13 @@ def arrayDistance(array1, array2, system: str):
             )
         # Euclidean distance in R^6.
         return float(np.linalg.norm(array1[:6] - array2[:6]))
+
+    if system_key == "dubins_airplane":
+        if len(array1) < 6 or len(array2) < 6:
+            raise ValueError("dubins_airplane states need six elements")
+        residual = array1[:6] - array2[:6]
+        residual[3] = (residual[3] + np.pi) % (2.0 * np.pi) - np.pi
+        return float(np.linalg.norm(residual))
 
     if system_key == "position":
         # Check if arrays have enough elements for SE2Position

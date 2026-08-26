@@ -14,12 +14,17 @@ def wrap_to_pi(angle: float) -> float:
 
 
 def se2_breakdown(a: np.ndarray, b: np.ndarray, system_name: str) -> tuple[float, float, float]:
-    """OMPL SE(2) distance plus planar and yaw deltas (yaw in [-pi, pi])."""
+    """State distance plus planar and primary-heading deltas for diagnostics."""
     aa = np.asarray(a, dtype=float).reshape(-1)
     bb = np.asarray(b, dtype=float).reshape(-1)
     d_ompl = float(arrayDistance(aa, bb, system=system_name))
     dxy = float(np.linalg.norm(aa[:2] - bb[:2]))
-    dth = wrap_to_pi(float(aa[2] - bb[2]))
+    angle_index = 3 if system_name in (
+        "dubins_airplane",
+        "dublin_airplane",
+        "airplane",
+    ) else 2
+    dth = wrap_to_pi(float(aa[angle_index] - bb[angle_index]))
     return d_ompl, dxy, dth
 
 
@@ -188,16 +193,20 @@ def reachable_plan_candidates(
     previous_controls = previous_plan.get("controls") or []
     if len(previous_controls) > 1 and len(previous_states) > 1:
         prev_dist = float(arrayDistance(pose, previous_states[1], system=system_name))
-        previous_candidate = suffix_plan_from_index(
-            previous_plan,
-            1,
-            pose,
-            continuity_dist=prev_dist,
-            source="previous plan suffix",
-            propagation_step_size=propagation_step_size,
-        )
-        if previous_candidate is not None:
-            candidates.append(previous_candidate)
+        if prev_dist <= max_dist:
+            previous_candidate = suffix_plan_from_index(
+                previous_plan,
+                1,
+                pose,
+                continuity_dist=prev_dist,
+                source="previous plan suffix",
+                propagation_step_size=propagation_step_size,
+            )
+            if previous_candidate is not None:
+                candidates.append(previous_candidate)
+        else:
+            rejected += 1
+            best_rejected_dist = min(best_rejected_dist, prev_dist)
 
     candidates.sort(key=lambda x: x["cost"])
     info = {

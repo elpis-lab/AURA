@@ -85,7 +85,7 @@ def generate_path_from_params(
     push_height: float | None = None,
     relative_push_offset: bool = True,
 ):
-    """Generate workspace paths using the simulation/collect_push_data.py representation.
+    """Generate workspace paths used by the MuJoCo pushing simulator.
 
     push_params are [normalized_face, relative_side_offset, absolute_distance].
     The side offset is converted to meters by multiplying by the contacted edge.

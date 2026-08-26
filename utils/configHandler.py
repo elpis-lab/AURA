@@ -619,7 +619,7 @@ def main() -> None:
     parser.add_argument(
         "--emit-bash",
         action="store_true",
-        help="Print bash assignments for run_initial_time_experiments.sh.",
+        help="Print Bash assignments for the initial-time runner.",
     )
     args = parser.parse_args()
 
